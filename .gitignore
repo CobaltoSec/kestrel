@@ -1,0 +1,46 @@
+# Nested repos (not part of kestrel)
+org-profile/
+
+# Environment / secrets
+.env
+*.ovpn
+*.key
+*.pem
+
+# Kestrel session state (never commit)
+state.json
+last-cycle.json
+sessions.jsonl
+profile.json
+fingerprint.json
+*.state.json
+
+# Session artifacts
+htb-sessions/
+sessions/
+raw/
+loot/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

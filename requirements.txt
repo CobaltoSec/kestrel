@@ -1,0 +1,7 @@
+# Kestrel — Python dependencies
+# Both scripts (blind_fingerprint.py, resume_validator.py) use Python stdlib only.
+# Python 3.10+ required.
+# No third-party packages needed for core functionality.
+#
+# Optional: pgvector KB integration (set KESTREL_KB_PATH env var)
+# psycopg2-binary>=2.9
