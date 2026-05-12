@@ -15,6 +15,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.1] — 2026-05-12
+
+### Added
+- CI: pytest job alongside ruff lint — runs `tests/` on every push to main/develop
+- CI: pip cache for faster workflow runs
+- CI: workflow triggers now include `develop` branch
+- `.github/CODEOWNERS` for review automation
+- `develop` branch for ongoing work before merging to main
+
+---
+
 ## [0.1.0] — 2026-05-08
 
 ### Added
