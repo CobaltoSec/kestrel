@@ -1,6 +1,6 @@
 # Kestrel — Architecture
 
-> Architecture overview. v0.1 (2026-05-08).
+> Architecture overview. v0.3 (2026-05-17).
 
 ---
 
@@ -188,13 +188,29 @@ Artifacts in `SESSION_DIR/`:
 - L4: Resume hardening: `resume_validator.sh` + p0 proactive validation + extended state schema
 - Docs: this architecture doc + README
 
-### v0.2 — Pending (iteration 2)
-- L1: multi-path hypothesis if confidence < 0.60
-- L3: feedback loop when /pentest finds complex AD chain
-- L4: KB synthesis automatic without gate for Medium+
-- Validation: active Hard machine (blind mode authentic)
+### v0.2 — 2026-05-11
+- L1: `blind_fingerprint.py` multi-path `attack_plan` output (primary + alternatives + parallel tracks)
+- L2: `wordlist_strategy.py`, `stuck_detector.py`, `parallel_explorer.py`, `crack_status.py`, `state_inspector.py`
+- L4: Cross-session dedup arrays (`tried_credentials`, `tried_endpoints`, `tried_hashes`)
+- Tests: 58 → 66 tests across 6 modules
 
-### v0.3 — Pending (iteration 3)
-- Sanitized phase library for public use
-- Full case studies (≥3 machines owned)
-- Comparison vs other HTB tools (AutoPwn, HackBot, Autorecon)
+### v0.3 — 2026-05-17 — Speed & Observability
+
+**Problem statement:** 10-session audit identified 5 time-sinks causing 6-30h sessions on 30min-2h targets.
+
+| Time-sink | Measured loss | Fix |
+|---|---|---|
+| Bcrypt CPU without GPU policy | 25-30 min | `wordlist_strategy.py` `recommendation=gpu_async` auto-escalation |
+| `stuck_detector` fires with `alternatives: []` | 4h30 (Helix) | STATIC_ALTERNATIVES fallback + `fingerprint.json` propagation |
+| VPN/VM instability without detection | 6h+ (Garfield) | `lab_unstable` signal, 9 patterns, 10-min window |
+| Cross-OS Docker blindspot | 10h (MonitorsFour) | `web_in_container` heuristic: Windows host + Linux web stack |
+| sessions.jsonl almost empty (telemetría rota) | All sessions blind | `tool-timer.sh` + `heartbeat.py` + session budget enforcement |
+
+**New components:**
+- `scripts/tool-timer.sh` — command wrapper with `duration_s` telemetry
+- `scripts/heartbeat.py` — session observability dashboard + budget alerting (exit codes 0-3)
+- `scripts/wordlist_strategy.py` `recommendation` field — cpu / gpu_async / hint_first
+- `blind_fingerprint.py` `web_in_container` category + `STATIC_ALTERNATIVES` guarantee
+- `stuck_detector.py` `lab_unstable` signal + `alternatives_from_attack_plan()` propagation
+- Session budget enforcement: `session_budget_min` in `last-cycle.json` + HITL prompt at 100%
+- Closure HARD GATE: p6 blocks until `feedback.md` has all 5 required sections

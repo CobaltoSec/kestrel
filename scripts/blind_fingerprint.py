@@ -141,6 +141,30 @@ FRAMEWORK_CATEGORIES = {
 
 KB_CONFIDENCE_THRESHOLD = 0.80
 
+# ─── v0.3 — Static fallback for alternative_chains ───────────────────────────
+# Used when KB returns < 2 results for a category. Guarantees alternative_chains
+# is never empty when at least one attack_category has confidence >= 0.5.
+# Marked with source="static_fallback" so the skill can narrate appropriately.
+
+STATIC_ALTERNATIVES: dict[str, list[str]] = {
+    "web-exploit":        ["cred-spray-discovered-users", "lfi-fuzz-common-paths", "default-creds-framework"],
+    "ad-abuse":           ["adcs-esc1", "kerberos-roast", "smb-relay"],
+    "smb-exploit":        ["null-session-enum", "cred-spray-smb", "ms17-010-check"],
+    "winrm-lateral":      ["cred-spray-winrm", "kerberos-roast", "smb-exploit"],
+    "rdp-attack":         ["bluekeep-check", "cred-spray-rdp", "xfreerdp-nla-bypass"],
+    "docker-escape":      ["docker-socket-abuse", "container-volume-mount", "cap-sys-admin"],
+    "database-exposed":   ["default-creds-dba", "udf-priv-esc", "secrets-in-tables"],
+    "nfs-exposed":        ["nfs-no-root-squash", "nfs-uid-reuse", "nfs-rw-write"],
+    "linux_priv":         ["suid-search", "cron-writable", "capabilities-enum", "docker-escape"],
+    "web_in_container":   ["docker-escape-cve", "container-volume-mount", "kernel-exploit-host"],
+    # Framework-specific fallbacks
+    "laravel-exploit":    ["laravel-debug-rce", "laravel-deserialization", "env-leak"],
+    "wordpress-exploit":  ["xmlrpc-brute", "plugin-vuln-scan", "wp-admin-upload"],
+    "tomcat-exploit":     ["ghostcat-ajp", "manager-upload", "tomcat-default-creds"],
+}
+
+ALT_CHAIN_KB_MIN_RESULTS = 2   # below this count → fill from STATIC_ALTERNATIVES
+
 
 def parse_nmap(path: str) -> tuple[list[str], list[str], list[str]]:
     """Parse nmap grepable (-oG) or normal text (-oN) output."""
@@ -286,6 +310,71 @@ def query_kb(categories: list[dict]) -> list[dict]:
     return kb_results
 
 
+LINUX_ONLY_FRAMEWORKS = {
+    "nginx", "apache", "php", "laravel", "django", "flask", "wordpress",
+    "drupal", "rails", "nextcloud", "gitlab", "cacti", "motioneye",
+    "zoneminder", "grafana", "gitea", "gogs",
+}
+
+WINDOWS_PORTS = {"88", "135", "139", "389", "445", "636", "3268", "3389", "5985", "5986"}
+
+
+def detect_web_in_container(
+    ports: list[str],
+    banners: list[str],
+    os_likely: str,
+    tech: list[str],
+    framework: str | None,
+) -> dict | None:
+    """Detect Windows host with Linux web stack — probable Docker container.
+
+    Triggers when ALL of:
+      1. os_likely == "windows" (SMB/RDP banners)
+      2. Only web ports exposed (no Windows-specific ports beyond what gave os_likely)
+      3. Web banner or tech stack indicates Linux-only software
+
+    Returns a category dict or None.
+    """
+    if os_likely != "windows":
+        return None
+
+    web_ports = {"80", "443", "8080", "8443", "8000", "8888"}
+    has_web = any(p in ports for p in web_ports)
+    if not has_web:
+        return None
+
+    # Look for Linux signatures in banners or tech stack
+    linux_sig = False
+    all_banners = " ".join(banners).lower()
+    all_tech = " ".join(tech).lower()
+
+    if framework and framework.lower() in LINUX_ONLY_FRAMEWORKS:
+        linux_sig = True
+    if not linux_sig:
+        for sig in LINUX_ONLY_FRAMEWORKS:
+            if sig in all_banners or sig in all_tech:
+                linux_sig = True
+                break
+    if not linux_sig:
+        # nginx or apache in banner without IIS
+        if ("nginx" in all_banners or "apache" in all_banners) and "iis" not in all_banners:
+            linux_sig = True
+
+    if not linux_sig:
+        return None
+
+    return {
+        "category": "web_in_container",
+        "description": (
+            "Windows host with Linux web stack — probable Docker container. "
+            "Exploit web CVE first, then attempt container escape."
+        ),
+        "confidence": 0.70,
+        "tactics": [3, 4, 6],
+        "kb_tags": ["docker escape", "container escape", "cacti", "linux web on windows"],
+    }
+
+
 def infer_os(ports: list[str], banners: list[str], os_hint: str) -> str:
     ports_set = set(ports)
     win_signals = {"88", "389", "445", "3389", "5985", "5986", "636", "3268"}
@@ -309,6 +398,150 @@ def build_summary(categories: list[dict], os_likely: str, framework: str | None)
         f"Top path: {top['category']} (conf={top['confidence']}){second}. "
         f"ATT&CK tactics: {', '.join(str(t) for t in top['tactics'][:3])}."
     )
+
+
+# ─── v0.2 — Multi-path attack plan (sub-bloque E) ────────────────────────────
+# Aditivo: el output v0.1.1 (`attack_categories`) sigue intacto. Nuevo campo
+# `attack_plan` da una vista de alto nivel con primary + alternatives + parallel
+# tracks, consumible por p3 cuando feature flag `multipath` esté activo.
+
+PRIMARY_CHAIN_HIGH_CONF = 0.80   # >= → primary = solo top
+ALT_CHAIN_MIN_CONF      = 0.40
+PARALLEL_TRACK_MIN_CONF = 0.40   # paralelo cubre secundarios low-conf útiles
+
+
+def _chain_rationale(categories: list[dict], framework: str | None,
+                     ad_joined: bool) -> str:
+    if not categories:
+        return "No category dominant — full vuln scan recommended."
+    names = [c["category"] for c in categories]
+    if "ad-abuse" in names and "winrm-lateral" in names:
+        return "AD joined + WinRM expuesto — foothold via AD enum y lateral con creds obtenidas."
+    if "web-exploit" in names and "docker-escape" in names:
+        return "Web exposto + Docker API — foothold web, escape de container si llega."
+    if "ad-abuse" in names:
+        return "Domain Controller activo — Kerberoast/AS-REP/ACL enum como entrada."
+    if "web-exploit" in names and framework:
+        return f"Stack web {framework} expuesto — explotar CVE específico del framework."
+    if "smb-exploit" in names:
+        return "SMB expuesto — null session, share enum, MS17-010 si banner viejo."
+    if "winrm-lateral" in names:
+        return "WinRM listening — necesita creds, spray + cred-stuffing como entrada."
+    return f"Top vector: {names[0]}."
+
+
+def _parallel_tracks(categories: list[dict], framework: str | None) -> list[str]:
+    tracks = []
+    names = {c["category"] for c in categories if c["confidence"] >= PARALLEL_TRACK_MIN_CONF}
+
+    if "ad-abuse" in names and "winrm-lateral" in names:
+        tracks.append("AD enum (Kerberoast/AS-REP) + WinRM cred spray en paralelo")
+    if "web-exploit" in names and ("winrm-lateral" in names or "smb-exploit" in names):
+        tracks.append("Web exploit para foothold + cred spray contra WinRM/SMB en paralelo")
+    if "web-exploit" in names and framework:
+        tracks.append(f"Exploit {framework} dirigido + cewl harvest del web stack en paralelo")
+    if "database-exposed" in names:
+        tracks.append("Database enum + cred spray (creds extraídos van a otros services)")
+    if "docker-escape" in names and "web-exploit" in names:
+        tracks.append("Web foothold + Docker API probe (2375) en paralelo")
+    if "nfs-exposed" in names:
+        tracks.append("NFS mount enum (showmount + mount -o nolock) en paralelo con vuln scan principal")
+    return tracks
+
+
+def _static_alternatives_for(category: str) -> list[dict]:
+    """Return static fallback chains for a category, marked as such."""
+    chains = STATIC_ALTERNATIVES.get(category, [])
+    if not chains:
+        return []
+    return [
+        {"categories": [c], "confidence": 0.40,
+         "rationale": f"Static fallback for {category}", "source": "static_fallback"}
+        for c in chains[:3]
+    ]
+
+
+def build_attack_plan(categories: list[dict], os_likely: str,
+                      framework: str | None, ad_joined: bool) -> dict:
+    """Multi-path attack plan derived from scored categories.
+
+    Schema:
+        {
+          "primary_chain":      {"categories": [...], "confidence": float, "rationale": str},
+          "alternative_chains": [ {same shape} ],
+          "parallel_tracks":    [ "..." ],
+          "execution_hint":     "single-path" | "multi-path" | "wide-scan"
+        }
+
+    v0.3: alternative_chains is GUARANTEED non-empty when any category has
+    confidence >= 0.5, using STATIC_ALTERNATIVES as fallback.
+    """
+    if not categories:
+        return {
+            "primary_chain":      {"categories": [], "confidence": 0.0,
+                                   "rationale": "No category dominant"},
+            "alternative_chains": [],
+            "parallel_tracks":    [],
+            "execution_hint":     "wide-scan",
+        }
+
+    top = categories[0]
+    primary_cats = [top["category"]]
+    primary_conf = top["confidence"]
+
+    if top["confidence"] < PRIMARY_CHAIN_HIGH_CONF and len(categories) >= 2 \
+            and categories[1]["confidence"] >= ALT_CHAIN_MIN_CONF:
+        primary_cats.append(categories[1]["category"])
+        primary_conf = round((top["confidence"] + categories[1]["confidence"]) / 2, 2)
+
+    primary = {
+        "categories": primary_cats,
+        "confidence": primary_conf,
+        "rationale":  _chain_rationale(
+            [c for c in categories if c["category"] in primary_cats],
+            framework, ad_joined),
+    }
+
+    skip = set(primary_cats)
+    alt_candidates = [c for c in categories[1:]
+                      if c["category"] not in skip
+                      and c["confidence"] >= ALT_CHAIN_MIN_CONF][:2]
+    alternatives = [
+        {
+            "categories": [c["category"]],
+            "confidence": c["confidence"],
+            "rationale":  _chain_rationale([c], framework, ad_joined),
+        }
+        for c in alt_candidates
+    ]
+
+    # v0.3 guarantee: if alternatives is empty and top category has conf >= ALT_CHAIN_MIN_CONF,
+    # fill from STATIC_ALTERNATIVES so stuck_detector always has something to suggest.
+    if not alternatives and top["confidence"] >= ALT_CHAIN_MIN_CONF:
+        alternatives = _static_alternatives_for(top["category"])
+        if not alternatives:
+            # Last resort: pull from any other eligible category's static set
+            for cat in categories[1:]:
+                if cat["confidence"] >= ALT_CHAIN_MIN_CONF:
+                    alternatives = _static_alternatives_for(cat["category"])
+                    if alternatives:
+                        break
+
+    tracks = _parallel_tracks(categories, framework)
+
+    if top["confidence"] >= PRIMARY_CHAIN_HIGH_CONF and not tracks:
+        hint = "single-path"
+    elif tracks or len(alternatives) >= 1:
+        hint = "multi-path"
+    else:
+        hint = "wide-scan"
+
+    return {
+        "primary_chain":      primary,
+        "alternative_chains": alternatives,
+        "parallel_tracks":    tracks,
+        "execution_hint":     hint,
+    }
 
 
 def main():
@@ -335,6 +568,15 @@ def main():
 
     categories = score_rules(ports, services, banners, os_likely, framework)
 
+    # v0.3 — web_in_container heuristic (P4.1)
+    wic = detect_web_in_container(ports, banners, os_likely, tech, framework)
+    if wic is not None:
+        # Insert at front if confidence > current top, else insert after top
+        if not categories or wic["confidence"] >= categories[0]["confidence"]:
+            categories.insert(0, wic)
+        else:
+            categories.insert(1, wic)
+
     if args.no_kb:
         kb_results = []
     else:
@@ -354,6 +596,7 @@ def main():
         "exposed_db": [s for s in services if s in {"mysql", "postgres", "mongodb", "redis", "elasticsearch"}],
         "tech_stack": tech,
         "attack_categories": output_categories,
+        "attack_plan": build_attack_plan(output_categories, os_likely, framework, ad_joined),
         "kb_results": kb_results,
         "kb_queried": len(kb_results) > 0,
         "summary": build_summary(categories, os_likely, framework),
