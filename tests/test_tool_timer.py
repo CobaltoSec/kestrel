@@ -91,6 +91,7 @@ def test_appends_across_invocations(tmp_path: Path):
     assert details.count("second") == 2
 
 
+@POSIX_ONLY
 def test_missing_args_nonzero(tmp_path: Path):
     """Missing --tool or cmd → non-zero exit."""
     r = subprocess.run(
@@ -100,6 +101,7 @@ def test_missing_args_nonzero(tmp_path: Path):
     assert r.returncode != 0
 
 
+@POSIX_ONLY
 def test_session_dir_flag_required(tmp_path: Path):
     """Missing --session-dir → non-zero exit."""
     r = subprocess.run(
