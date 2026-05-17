@@ -26,9 +26,7 @@ Usage:
 
 import json
 import os
-import signal
 import subprocess
-import sys
 
 
 def check_vpn() -> bool:

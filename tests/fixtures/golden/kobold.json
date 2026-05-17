@@ -1,0 +1,21 @@
+{
+  "machine": "kobold",
+  "source": "htb-sessions/htb-2026-05-06-kobold",
+  "input": {
+    "ports": ["22", "80", "2375"],
+    "services": ["ssh", "http", "docker"],
+    "banners": ["openssh", "nginx", "docker engine api"],
+    "os": "Linux",
+    "difficulty": "Easy"
+  },
+  "expected": {
+    "top_category": "docker-escape",
+    "top_confidence_min": 0.85,
+    "categories_present": [
+      {"name": "docker-escape", "min_confidence": 0.85},
+      {"name": "web-exploit",   "min_confidence": 0.40}
+    ],
+    "os_likely": "linux",
+    "ad_joined": false
+  }
+}

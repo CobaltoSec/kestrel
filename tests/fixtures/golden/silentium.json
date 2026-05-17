@@ -1,0 +1,20 @@
+{
+  "machine": "silentium",
+  "source": "htb-sessions/htb-2026-05-03-silentium",
+  "input": {
+    "ports": ["22", "80"],
+    "services": ["ssh", "http"],
+    "banners": ["openssh 9.6", "nginx"],
+    "os": "Linux",
+    "difficulty": "Easy"
+  },
+  "expected": {
+    "top_category": "web-exploit",
+    "top_confidence_min": 0.40,
+    "categories_present": [
+      {"name": "web-exploit", "min_confidence": 0.40}
+    ],
+    "os_likely": "linux",
+    "ad_joined": false
+  }
+}

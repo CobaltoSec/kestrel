@@ -1,0 +1,22 @@
+{
+  "machine": "garfield",
+  "source": "htb-sessions/htb-2026-05-06-garfield",
+  "input": {
+    "ports": ["53", "88", "135", "139", "389", "445", "464", "593", "636", "3268", "3269", "5985"],
+    "services": ["domain", "kerberos", "msrpc", "netbios-ssn", "ldap", "smb", "kpasswd5", "ncacn_http", "ldaps", "globalcatldap", "globalcatldapssl", "wsman"],
+    "banners": ["microsoft windows kerberos", "windows server 2019"],
+    "os": "Windows",
+    "difficulty": "Hard"
+  },
+  "expected": {
+    "top_category": "ad-abuse",
+    "top_confidence_min": 0.85,
+    "categories_present": [
+      {"name": "ad-abuse",       "min_confidence": 0.85},
+      {"name": "smb-exploit",    "min_confidence": 0.60},
+      {"name": "winrm-lateral",  "min_confidence": 0.70}
+    ],
+    "os_likely": "windows",
+    "ad_joined": true
+  }
+}

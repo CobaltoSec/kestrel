@@ -1,0 +1,102 @@
+{
+  "agent": "htb",
+  "last_run": "2026-05-11T19:45:00Z",
+  "cycle_id": "HTB-20260508T000000Z",
+  "run_count": 12,
+  "data": {
+    "current_phase": "p3-delegate-pentest",
+    "current_session": "htb-2026-05-08-monitorsfour",
+    "paused": true,
+    "paused_reason": "winrm spray exhausted, bcrypt no rompe en CPU",
+    "resumed_session_count": 2,
+    "machines": {
+      "monitorsfour": {
+        "machine_id": 814,
+        "machine_os": "Windows",
+        "machine_difficulty": "Easy",
+        "machine_retired": false,
+        "htb_mode": "blind",
+        "session_slug": "htb-2026-05-08-monitorsfour",
+        "user_owned": true,
+        "root_owned": false,
+        "tried_credentials": [
+          {
+            "user": "marcus",
+            "password": "wonderful1",
+            "service": "cacti-web",
+            "result": "success",
+            "ts": "2026-05-11T11:30:00Z"
+          },
+          {
+            "user": "admin",
+            "password": "wonderful1",
+            "service": "winrm",
+            "result": "auth_failed",
+            "ts": "2026-05-11T19:30:00Z"
+          },
+          {
+            "user": "marcus",
+            "password": "wonderful1",
+            "service": "winrm",
+            "result": "auth_failed",
+            "ts": "2026-05-11T19:35:00Z"
+          },
+          {
+            "user": "cactidbuser",
+            "password": "7pyrf6ly8qx4",
+            "service": "winrm",
+            "result": "auth_failed",
+            "ts": "2026-05-11T19:40:00Z"
+          }
+        ],
+        "tried_endpoints": [
+          {
+            "path": "/api/v1/users",
+            "method": "GET",
+            "vhost": "monitorsfour.htb",
+            "status": 200,
+            "interesting": true,
+            "ts": "2026-05-11T11:00:00Z"
+          },
+          {
+            "path": "/admin",
+            "method": "GET",
+            "vhost": "cacti.monitorsfour.htb",
+            "status": 302,
+            "interesting": true,
+            "ts": "2026-05-11T11:15:00Z"
+          }
+        ],
+        "tried_hashes": [
+          {
+            "hash_preview": "56b32eb43e6f15395f6c46c1c9e1cd36",
+            "type": "md5",
+            "wordlist": "rockyou",
+            "rules": "none",
+            "elapsed_s": 12,
+            "result": "match",
+            "ts": "2026-05-11T11:30:00Z"
+          },
+          {
+            "hash_preview": "$2y$10$wqlo06C4...",
+            "type": "bcrypt",
+            "wordlist": "rockyou",
+            "rules": "none",
+            "elapsed_s": 300,
+            "result": "no_match",
+            "ts": "2026-05-11T19:30:00Z"
+          },
+          {
+            "hash_preview": "69196959c16b26ef00b77d82cf6eb169",
+            "type": "md5",
+            "wordlist": "rockyou",
+            "rules": "best64",
+            "elapsed_s": 60,
+            "result": "no_match",
+            "ts": "2026-05-11T19:35:00Z"
+          }
+        ]
+      }
+    }
+  }
+}

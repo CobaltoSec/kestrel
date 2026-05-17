@@ -1,0 +1,21 @@
+{
+  "machine": "monitorsfour",
+  "source": "htb-sessions/htb-2026-05-08-monitorsfour",
+  "input": {
+    "ports": ["80", "5985"],
+    "services": ["http", "wsman"],
+    "banners": ["microsoft-iis/10.0", "microsoft httpapi httpd 2.0"],
+    "os": "Windows",
+    "difficulty": "Easy"
+  },
+  "expected": {
+    "top_category": "winrm-lateral",
+    "top_confidence_min": 0.70,
+    "categories_present": [
+      {"name": "winrm-lateral", "min_confidence": 0.70},
+      {"name": "web-exploit",   "min_confidence": 0.30}
+    ],
+    "os_likely": "windows",
+    "ad_joined": false
+  }
+}
