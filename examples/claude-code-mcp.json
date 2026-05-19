@@ -1,0 +1,16 @@
+{
+  "_comment": "Kestrel MCP server config for Claude Code. Add this block to ~/.claude.json (Windows) or ~/.claude/mcp_servers.json (POSIX) under the top-level mcpServers key, then restart CC.",
+  "mcpServers": {
+    "kestrel": {
+      "command": "C:/opsec/runner/.venv/Scripts/kestrel-mcp.exe",
+      "args": [
+        "--state-dir",
+        "C:/Proyectos/CobaltoSec/fleet/agents/htb/state",
+        "--session-root",
+        "C:/Proyectos/CobaltoSec/sectors/red-team/htb-sessions",
+        "--log-level",
+        "INFO"
+      ]
+    }
+  }
+}
