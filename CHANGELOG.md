@@ -8,6 +8,27 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v0.4.0-dev (RT-KESTREL-V04 — MCP Pivot, in progress)
+
+Branch `feat/v04-mcp-pivot`. **PARTIAL** — 6/16 fases del plan completas, branch local, no pusheado.
+
+**Hecho (Fase 0-5):**
+- **Fase 0 — Preflight + snapshot**: branch creada, phases v0.3 archivadas a `docs/v03-phases-archive/`, `requirements.lock.txt`, baseline 80 pass + 16 skip.
+- **Fase 1 — Pyproject + skeleton**: `pyproject.toml` PEP 621 (`kestrel-htb 0.4.0-dev`), console scripts `kestrel` + `kestrel-mcp`, `src/kestrel/{mcp,core,transport,integrations,state,agent}/`. Deps clave: `mcp>=1.0`, `paramiko`, `pypsrp`, `pymetasploit3`, `filelock`, `typer`, `Jinja2`, `httpx`, `pydantic>=2.5`. Agent runner diferido a v0.5 (stub `NotImplementedError`).
+- **Fase 2 — Core refactor**: 8 scripts movidos a `src/kestrel/core/*.py` (fingerprint, stuck, wordlist, crack, heartbeat, state_inspector, parallel, resume_validator). Shim files en `scripts/` con `DeprecationWarning` para retrocompat 1 ciclo. Nuevo `core/timer.py` reemplaza `tool-timer.sh` con contextmanager Python + `run_with_timer` CLI-compat. Heartbeat refactor: data layer (`emit_dashboard_data`) separado de presentation. Tests 90 pass + 10 nuevos = 100. 0 regresiones.
+- **Fase 3 — State store + schema**: `kestrel.state.schema` con pydantic models completos v0.3 (LastCycle, MachineState con todos los campos v0.2/v0.2.1/v0.3, AttackPlan, CurrentVector, HashJob, TriedCredential/Endpoint/Hash, KaliListener, SessionEvent, Profile). `kestrel.state.store.StateStore` con filelock + atomic temp+rename, `_write_unlocked` para re-entrant safety. 16 tests incluyen concurrent updates con threading, roundtrip de prod `fleet/agents/htb/state/last-cycle.json` real.
+- **Fase 4 — Transport + MSF RPC setup**: `transport/base.py` Session ABC + SessionRegistry thread-safe; `transport/ssh.py` paramiko persistente con upload/download; `transport/winrm.py` pypsrp NTLM/Kerberos; `transport/msf.py` pymetasploit3 RPC con `execute_exploit`, `sessions`, `wait_for_session`, `ping`; `transport/kali_proxy.py` global session + `via_kali()`. `scripts/kali-setup-msfrpc.sh` idempotente con systemd unit. 24 tests mocked.
+- **Fase 5 — MCP server boilerplate**: `mcp/registry.py` decoradores `@tool/@prompt/@resource` + JSON schema inference desde type hints; `mcp/context.py` singleton ServerContext con StateStore + SessionRegistry; `mcp/server.py` con SDK oficial Anthropic (Server, list_tools/call_tool/list_prompts/get_prompt/list_resources/read_resource handlers, stdio transport, file logging a `%LOCALAPPDATA%/kestrel/mcp.log`, URI template matching para `kestrel://session/{machine}/...`). Dummy handlers: tool `kestrel_ping`, tool `kestrel_version`, resource `kestrel://config`, prompt `kestrel_kickoff`. Examples `claude-{code,desktop}-mcp.json`. 18 tests.
+
+**Pendiente:**
+- Validación handshake CC restart (config en `~/.claude/mcp_servers.json` ya agregada).
+- Fase 6: 50+ tools por categoría (state/phase/narrate, htb, vpn/kali, recon, intel, vuln, creds/exploit/post/ad, session, flag/writeup/HITL/heartbeat).
+- Fases 7-13: prompts MCP, resources completos, CLI completo (debug subcommands), skill `/kestrel` thin rewrite, tests + CI, docs (architecture v0.4, tools-reference, public-usage), cutover.
+- Check final + E2E Lame target ≤10min con HITL 3-4.
+- Tag `v0.4.0-rc1` post-E2E, después `v0.4.0` + GitHub Release.
+
+**Tests al cierre PARTIAL**: 148 pass, 16 skip, 0 fail.
+
 ---
 
 ## [0.3.0] — 2026-05-17
