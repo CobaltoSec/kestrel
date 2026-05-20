@@ -1,216 +1,189 @@
-# Kestrel — Architecture
+# Kestrel — Architecture v0.4
 
-> Architecture overview. v0.3 (2026-05-17).
-
----
-
-## What is Kestrel?
-
-An engagement orchestrator for HackTheBox VMs. Its differentiator is an intelligence layer applied before touching the network: on retired machines it reads public writeups to go directly to the CVE; on active machines it classifies the target by ports/services to prioritize the attack vector.
-
-**Not:** a scanner, an exploit framework, or a bot that solves HTB automatically.
-**Is:** a decision system that reduces an unknown VM to an executable sequence of steps, with human-in-the-loop (HITL) only at the ~6 moments that actually matter.
+> v0.4 — MCP server pivot (RT-KESTREL-V04, 2026-05-20).
+>
+> v0.3 architecture preserved at `architecture.md` for reference. This document describes
+> what changed in v0.4 and how the new layout works.
 
 ---
 
-## 4-Layer Model
+## What changed from v0.3
+
+| Aspect | v0.3 | v0.4 |
+|--------|------|------|
+| Distribution | Claude Code skill (markdown phases) + scripts dispersos | **Pip-installable MCP server** + thin Claude Code skill |
+| Execution | Skill delegates to `/pentest --mode lab` | **MCP tools native** — 70+ tools registered by category |
+| LLM contract | Markdown prompts Claude interprets | **MCP protocol** — tool-use, resources, prompts (typed) |
+| Tools | Bash scripts + python scripts | Python modules in `src/kestrel/core/` + MCP wrappers |
+| State | Manual `state.json` writes | `StateStore` with filelock + atomic temp/rename |
+| Transport | Inline SSH commands | `transport/` layer: ssh (paramiko), winrm (pypsrp), msf (pymetasploit3 RPC) |
+| HITL | Markdown prompts asking Nico | `request_user_confirmation` tool with `_hitl` marker for client |
+| Skill lines | 134 | **105 (thin wrapper)** |
+
+---
+
+## 5-Layer Model (v0.4)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  4. MEMORY                                              │
-│     estado.md · state.json · writeup.md                 │
-│     KB synthesis · publish-hint                         │
-│     → persists between sessions, learns from each run   │
-├─────────────────────────────────────────────────────────┤
-│  3. EXECUTION                                           │
-│     delegated to /pentest --mode lab                    │
-│     p2-discovery → p3-vuln → p4-exploit                 │
-│     → Kestrel orchestrates, doesn't execute directly    │
-├─────────────────────────────────────────────────────────┤
-│  2. ORCHESTRATION                                       │
-│     phases p0 → p1 → p1.5 → p2 → p3 → p4 → p5 → p6   │
-│     mode switching · HITL gates · continuous narration  │
-│     → workflow engine, core of Kestrel                  │
-├─────────────────────────────────────────────────────────┤
-│  1. INTEL                                               │
-│     WebSearch retired + blind_fingerprint.py active     │
-│     intel.md · fingerprint.json · KB auto-query         │
-│     → the hover before the dive                         │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  5. MCP PROTOCOL                                            │
+│     stdio transport · list_tools / call_tool                │
+│     list_prompts / get_prompt · list_resources / read       │
+│     → client = Claude Code; future = any MCP-capable LLM    │
+├─────────────────────────────────────────────────────────────┤
+│  4. MEMORY                                                  │
+│     estado.md · last-cycle.json (StateStore + filelock)     │
+│     writeup.md · feedback.md · sessions.jsonl               │
+│     KB synthesis · publish-hint                             │
+├─────────────────────────────────────────────────────────────┤
+│  3. EXECUTION                                               │
+│     transport/ssh.py (Kali via paramiko, persistent)        │
+│     transport/winrm.py (post-foothold Windows)              │
+│     transport/msf.py (pymetasploit3 RPC — exploit/sessions) │
+│     transport/kali_proxy.py (shared via_kali helper)        │
+├─────────────────────────────────────────────────────────────┤
+│  2. ORCHESTRATION                                           │
+│     phases p0_setup → p1_recon → p2_vector → p3_exploit     │
+│     → p4_privesc → p5_close                                 │
+│     prompts/ — Jinja2 templates per phase                   │
+│     narrate_emit · stuck_check · heartbeat_status           │
+├─────────────────────────────────────────────────────────────┤
+│  1. INTEL                                                   │
+│     core/fingerprint.py (rules + KB auto-query)             │
+│     intel_classify_blind · intel_cve_lookup (4-stage)       │
+│     intel_kb_query (graceful fallback)                      │
+│     intel_save_synthesis (anti-spoiler validation)          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Layer 1 — Intel
+## MCP layout
 
-**Responsibility**: know the target before touching the network.
-
-**Guided mode (retired machines):**
-- WebSearch 4 parallel queries (writeup sources)
-- Fetch top-3 URLs → anti-spoiler synthesis
-- Output: `intel.md` with confidence (high/medium/low) + probable chain
-
-**Blind mode (active machines):**
-- HTB TOS: no writeups for active machines → no WebSearch
-- `blind_fingerprint.py` post-discovery:
-  - Classifies ports/services/banners → attack_categories with confidence scores
-  - KB auto-query for categories with confidence ≥ 0.80
-- Output: `fingerprint.json` with attack_categories + kb_results
-
----
-
-## Layer 2 — Orchestration
-
-**Responsibility**: complete workflow, decisions, HITL.
-
-| Phase | Function |
-|---|---|
-| p0 | Dashboard + active session detection + proactive resume |
-| p1 | Machine list via HTB API, extract MACHINE_RETIRED flag |
-| p1.5 | Intel: guided (WebSearch) or blind (fingerprint handoff) |
-| p2 | SESSION_DIR + roe.md + VPN + spawn + ping |
-| p3 | **Core**: guided/blind branch, continuous narration, critical HITL |
-| p4 | Submit user+root via HTB API, update profile |
-| p5 | Writeup + KB synthesis + gap analysis + publish-hint |
-| p6 | Release + VPN down + debrief |
-
-**Key design decisions:**
-- HITL ~6 (vs ~19 pre-redesign) — only at vector exploit (H3) and destructive privesc (H5 conditional)
-- Continuous narration without Enter mid-flight
-- Stuck gate Easy threshold=1 guided skip, 1 attempt blind
-- Hash Policy: 5 min max CPU → GPU/hint automatic
-
----
-
-## Layer 3 — Execution
-
-**Responsibility**: run the actual commands against the target.
-
-Kestrel **does not execute directly**. It delegates to `/pentest --mode lab`:
-- Discovery → nmap + recon.md
-- Vuln → prioritized vuln checks
-- Exploit → exploit + post-exploitation
-
-**L2 → L3 handoff contract:**
 ```
-MODE=lab
-TARGET=<TARGET_IP>
-ENGAGEMENT_DIR=<SESSION_DIR>
-PRIORITY_SERVICE=<from fingerprint.json in blind mode>  # optional
-SKIP_GENERIC_NUCLEI=true                                # blind with conf ≥ 0.70
+src/kestrel/
+├── __init__.py           # __version__ = "0.4.0-dev"
+├── cli.py                # typer — kestrel {mcp,status,state,config,debug,version,agent}
+├── mcp/
+│   ├── server.py         # entrypoint kestrel-mcp (stdio transport)
+│   ├── registry.py       # @tool / @prompt / @resource decorators + global registry
+│   ├── context.py        # ServerContext (state_dir, session_root, sessions, state_store)
+│   ├── tools/            # 15 modules — 70 tools across 19 categories
+│   │   ├── state.py      # state_read/write/append/session_dir
+│   │   ├── phase.py      # phase_current/enter (returns guidance)
+│   │   ├── narrate.py    # narrate_emit (📡 🔍 💡 ➡)
+│   │   ├── htb.py        # HTB API v4 (list/info/spawn/release/submit/profile)
+│   │   ├── vpn.py        # htb-vpn.sh wrapper
+│   │   ├── kali.py       # kali_status / kali_ping_target
+│   │   ├── recon.py      # nmap (4 profiles), web/smb/dns/ldap enum, service probe
+│   │   ├── intel.py      # classify_blind, kb_query, cve_lookup, save_synthesis
+│   │   ├── vuln.py       # nuclei targeted/broad, exploit-db local, msf search
+│   │   ├── creds.py      # default_check, password_spray, hash crack/recommend/status
+│   │   ├── exploit.py    # run_msf (RPC), run_poc, web LFI/RCE, smb_psexec, winrm
+│   │   ├── post.py       # linpeas/winpeas, enum, privesc heuristics (sudo/kernel/token/potato)
+│   │   ├── ad.py         # bloodhound, kerberoast, asreproast, dcsync (impacket)
+│   │   ├── session.py    # session_open/exec/close/list (transport handles)
+│   │   ├── flag.py       # extract + validate (HTB 32-hex format)
+│   │   ├── writeup.py    # generate (Jinja2), kb_synthesize, publish_hint
+│   │   ├── heartbeat.py  # stuck_check, heartbeat_status (wraps core/)
+│   │   └── hitl.py       # request_user_confirmation (_hitl marker contract)
+│   ├── prompts/          # 5 modules — 10 prompts
+│   │   ├── kickoff.py    # kestrel_kickoff (role + phases + narration + HITL)
+│   │   ├── phases.py     # p0_setup..p5_close (with state context interpolation)
+│   │   ├── synthesis.py  # intel_synthesis_template (anti-spoiler rules)
+│   │   ├── hint.py       # hint_generation (1-line, context-aware)
+│   │   └── debrief.py    # debrief_template (5-section HARD GATE)
+│   └── resources/        # 3 modules — 10 URIs
+│       ├── state.py      # kestrel://state/{last-cycle,sessions-jsonl,profile}
+│       ├── session.py    # kestrel://session/{machine}/{intel,recon,findings,fingerprint,writeup}
+│       └── kb.py         # kestrel://kb/categories (RULES catalog)
+├── core/                 # Pure-python logic, testable in isolation
+│   ├── fingerprint.py
+│   ├── stuck.py
+│   ├── heartbeat.py
+│   ├── wordlist.py
+│   ├── crack.py
+│   └── ...
+├── state/
+│   ├── schema.py         # Pydantic models (LastCycle, MachineState, etc.)
+│   └── store.py          # StateStore with filelock + atomic writes
+├── transport/
+│   ├── base.py           # Session ABC, SessionRegistry (thread-safe)
+│   ├── ssh.py            # paramiko (Kali default)
+│   ├── winrm.py          # pypsrp
+│   ├── msf.py            # pymetasploit3 RPC
+│   └── kali_proxy.py     # via_kali() global helper
+└── agent/                # STUB v0.5 — public ReAct agent runner
 ```
 
-**Current bottleneck**: handoff is one-way. If /pentest finds something unexpected (complex AD chain, RBCD), Kestrel doesn't replan — it only executes the stuck gate. Future improvement: L3→L2 feedback loop via estado.md parsing.
-
 ---
 
-## Layer 4 — Memory
+## HITL contract (`request_user_confirmation`)
 
-**Responsibility**: persist state between sessions + learn from each engagement.
+MCP tools cannot natively block on user input. The HITL contract uses a structured marker:
 
-**During engagement:**
-- `estado.md` — narrative progress notes
-- `state.json` — state machine (current_phase, kali_listeners, next_step_hint, etc.)
-
-**Post-engagement:**
-- `writeup.md` — complete writeup (8 sections)
-- KB synthesis → staging for ingestion into pgvector
-- `publish-hint.json` → queue for eventual blog publication
-
-**Cross-session resume:**
-- `resume_validator.sh` runs on Kali — validates VPN + machine IP + listeners
-- p0 invokes it proactively when a paused session is detected
-- Auto-recovery: re-up VPN + respawn machine + restart listeners
-
-**L4 → L1 loop**: KB syntheses generated post-engagement feed into future blind fingerprints via KB auto-query.
-
----
-
-## Handoff Contracts
-
-### L1 → L2
-`intel.md` (guided) or `fingerprint.json` (blind) in `SESSION_DIR/`:
 ```json
 {
-  "intel_confidence": "high|medium|low|none",
-  "htb_mode": "guided|blind",
-  "blind_fingerprint_top": "ad-abuse",
-  "blind_fingerprint_conf": 0.85
+  "_hitl": true,
+  "question": "Pick exploit vector?",
+  "options": ["samba_usermap", "ms17-010"],
+  "context": "Samba 3.0.20 + 445/139 open",
+  "instruction_to_llm": "Stop, present this question..."
 }
 ```
 
-### L2 → L3
-Variables in `roe.md` frontmatter:
-```yaml
-mode: lab
-htb_mode: guided|blind
-target: 10.10.10.x
-priority_service: smb        # blind only
-skip_generic_nuclei: true    # blind with conf ≥ 0.70
+The MCP client (Claude Code) recognizes the `_hitl` marker and pauses to ask the operator.
+The operator's answer arrives as the LLM's next prompt — the loop continues.
+
+---
+
+## Phase flow
+
+```
+                    ┌─────────────────┐
+                    │  /kestrel start │
+                    └────────┬────────┘
+                             │ invoke prompt kestrel_kickoff
+                             ▼
+                  ┌──────────────────────┐
+                  │  phase_enter(p0)     │ ← machine_pick HITL
+                  └──────────┬───────────┘
+                             ▼
+                  ┌──────────────────────┐
+                  │  phase_enter(p1)     │ ← recon + classify (no HITL)
+                  └──────────┬───────────┘
+                             ▼
+                  ┌──────────────────────┐
+                  │  phase_enter(p2)     │ ← vector_confirm HITL
+                  └──────────┬───────────┘
+                             ▼
+                  ┌──────────────────────┐
+                  │  phase_enter(p3)     │ ← optional destructive HITL
+                  └──────────┬───────────┘
+                             │ stuck? → stuck_check → switch_vector → loop back
+                             ▼
+                  ┌──────────────────────┐
+                  │  phase_enter(p4)     │ ← skip si foothold ya es root
+                  └──────────┬───────────┘
+                             ▼
+                  ┌──────────────────────┐
+                  │  phase_enter(p5)     │ ← submit_confirm + debrief HITL
+                  └──────────────────────┘
 ```
 
-### L3 → L4
-Artifacts in `SESSION_DIR/`:
-- `recon.md`, `findings.md`, `loot/user.txt`, `loot/root.txt`
-- Updates to `estado.md` and `state.json` (techniques[], gaps_found[])
+---
+
+## Compatibility with v0.3
+
+- v0.3 phases markdown archived at `docs/v03-phases-archive/` (read-only reference).
+- v0.3 scripts (`scripts/*.py`) remain as shim files importing from `src/kestrel/core/*` with `DeprecationWarning`. Removed in v0.5.
+- Public agent runner (ReAct with Anthropic/OpenAI/Ollama providers) **deferred to v0.5**. In v0.4 the only supported client is Claude Code via MCP.
 
 ---
 
-## Bottlenecks
+## What v0.4 doesn't yet have (→ v0.5)
 
-| Layer | Bottleneck | Impact | Future mitigation |
-|---|---|---|---|
-| **L1** | Blind mode without writeups = port classification only. Works for Easy/Medium but loses nuance in Hard AD chains. | ~30% less context on complex chains | v1.1: multi-path hypothesis (top-3 probable chains with probability) |
-| **L2** | L2→L3 handoff is one-way. If /pentest finds something unexpected, Kestrel doesn't replan. | Garfield: RBCD chain not in flow → paused | v1.2: feedback loop L3→L2 via estado.md parsing |
-| **L3** | Handoff contract doesn't force /pentest to return "stuck" signals. | Stuck in L3 = stuck in Kestrel | v1.1: event/webhook from p4-exploit back to Kestrel |
-| **L4** | KB synthesis is opt-in. | Some sessions don't synthesize | v1.1: auto synthesis default=true for Medium+ |
-
----
-
-## Decision Log
-
-| Decision | Why |
-|---|---|
-| **Retired-only WebSearch** | HTB TOS prohibits writeups for active machines. Skip for compliance, not capability. |
-| **HITL ~6 vs ~19** | Redesign reduced prompts by eliminating trivial confirmations. Only H3 (exploit vector) and H5 (destructive privesc) are mandatory. |
-| **Continuous narration without Enter** | Better learning experience — read output while it runs, not at the end. Enter mid-flight interrupts flow and increases friction. |
-| **Hash Policy 5 min → GPU/hint** | bcrypt case: 45 min CPU that was avoidable. Proactive policy = don't block flow on a hash. |
-| **Stuck gate Easy threshold=1** | Easy guided: skip (intel already guides). Easy blind: 1 failed attempt = hint. Aggressive but justified — Easy shouldn't need more. |
-| **L3 delegated to /pentest** | Kestrel doesn't re-implement recon/vuln/exploit. Inherits 90% of the logic. Cost: rigidity in handoff (see bottlenecks). |
-
----
-
-## Iteration Log
-
-### v0.1 — 2026-05-08
-- L1: Blind fingerprinting layer (`blind_fingerprint.py` + p1.5 + p3 PASO 1.5)
-- L2: Snapshot hooks in p3 (next_step_hint + last_phase_completed)
-- L4: Resume hardening: `resume_validator.sh` + p0 proactive validation + extended state schema
-- Docs: this architecture doc + README
-
-### v0.2 — 2026-05-11
-- L1: `blind_fingerprint.py` multi-path `attack_plan` output (primary + alternatives + parallel tracks)
-- L2: `wordlist_strategy.py`, `stuck_detector.py`, `parallel_explorer.py`, `crack_status.py`, `state_inspector.py`
-- L4: Cross-session dedup arrays (`tried_credentials`, `tried_endpoints`, `tried_hashes`)
-- Tests: 58 → 66 tests across 6 modules
-
-### v0.3 — 2026-05-17 — Speed & Observability
-
-**Problem statement:** 10-session audit identified 5 time-sinks causing 6-30h sessions on 30min-2h targets.
-
-| Time-sink | Measured loss | Fix |
-|---|---|---|
-| Bcrypt CPU without GPU policy | 25-30 min | `wordlist_strategy.py` `recommendation=gpu_async` auto-escalation |
-| `stuck_detector` fires with `alternatives: []` | 4h30 (Helix) | STATIC_ALTERNATIVES fallback + `fingerprint.json` propagation |
-| VPN/VM instability without detection | 6h+ (Garfield) | `lab_unstable` signal, 9 patterns, 10-min window |
-| Cross-OS Docker blindspot | 10h (MonitorsFour) | `web_in_container` heuristic: Windows host + Linux web stack |
-| sessions.jsonl almost empty (telemetría rota) | All sessions blind | `tool-timer.sh` + `heartbeat.py` + session budget enforcement |
-
-**New components:**
-- `scripts/tool-timer.sh` — command wrapper with `duration_s` telemetry
-- `scripts/heartbeat.py` — session observability dashboard + budget alerting (exit codes 0-3)
-- `scripts/wordlist_strategy.py` `recommendation` field — cpu / gpu_async / hint_first
-- `blind_fingerprint.py` `web_in_container` category + `STATIC_ALTERNATIVES` guarantee
-- `stuck_detector.py` `lab_unstable` signal + `alternatives_from_attack_plan()` propagation
-- Session budget enforcement: `session_budget_min` in `last-cycle.json` + HITL prompt at 100%
-- Closure HARD GATE: p6 blocks until `feedback.md` has all 5 required sections
+- Public ReAct agent runner (Anthropic / OpenAI / Ollama providers).
+- WinRM full coverage (currently best-effort, pypsrp unwired).
+- CI E2E job actually running against a HTB target.
+- TUI for the operator side (currently just `/kestrel status` JSON dump).

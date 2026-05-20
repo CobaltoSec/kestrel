@@ -8,26 +8,52 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### v0.4.0-dev (RT-KESTREL-V04 — MCP Pivot, in progress)
+### v0.4.0-dev (RT-KESTREL-V04 — MCP Pivot)
 
-Branch `feat/v04-mcp-pivot`. **PARTIAL** — 6/16 fases del plan completas, branch local, no pusheado.
+Branch `feat/v04-mcp-pivot`. **15/16 fases del plan completas** (pendiente: E2E Lame final).
 
-**Hecho (Fase 0-5):**
+**Hecho (Fase 0-13):**
 - **Fase 0 — Preflight + snapshot**: branch creada, phases v0.3 archivadas a `docs/v03-phases-archive/`, `requirements.lock.txt`, baseline 80 pass + 16 skip.
 - **Fase 1 — Pyproject + skeleton**: `pyproject.toml` PEP 621 (`kestrel-htb 0.4.0-dev`), console scripts `kestrel` + `kestrel-mcp`, `src/kestrel/{mcp,core,transport,integrations,state,agent}/`. Deps clave: `mcp>=1.0`, `paramiko`, `pypsrp`, `pymetasploit3`, `filelock`, `typer`, `Jinja2`, `httpx`, `pydantic>=2.5`. Agent runner diferido a v0.5 (stub `NotImplementedError`).
 - **Fase 2 — Core refactor**: 8 scripts movidos a `src/kestrel/core/*.py` (fingerprint, stuck, wordlist, crack, heartbeat, state_inspector, parallel, resume_validator). Shim files en `scripts/` con `DeprecationWarning` para retrocompat 1 ciclo. Nuevo `core/timer.py` reemplaza `tool-timer.sh` con contextmanager Python + `run_with_timer` CLI-compat. Heartbeat refactor: data layer (`emit_dashboard_data`) separado de presentation. Tests 90 pass + 10 nuevos = 100. 0 regresiones.
 - **Fase 3 — State store + schema**: `kestrel.state.schema` con pydantic models completos v0.3 (LastCycle, MachineState con todos los campos v0.2/v0.2.1/v0.3, AttackPlan, CurrentVector, HashJob, TriedCredential/Endpoint/Hash, KaliListener, SessionEvent, Profile). `kestrel.state.store.StateStore` con filelock + atomic temp+rename, `_write_unlocked` para re-entrant safety. 16 tests incluyen concurrent updates con threading, roundtrip de prod `fleet/agents/htb/state/last-cycle.json` real.
 - **Fase 4 — Transport + MSF RPC setup**: `transport/base.py` Session ABC + SessionRegistry thread-safe; `transport/ssh.py` paramiko persistente con upload/download; `transport/winrm.py` pypsrp NTLM/Kerberos; `transport/msf.py` pymetasploit3 RPC con `execute_exploit`, `sessions`, `wait_for_session`, `ping`; `transport/kali_proxy.py` global session + `via_kali()`. `scripts/kali-setup-msfrpc.sh` idempotente con systemd unit. 24 tests mocked.
-- **Fase 5 — MCP server boilerplate**: `mcp/registry.py` decoradores `@tool/@prompt/@resource` + JSON schema inference desde type hints; `mcp/context.py` singleton ServerContext con StateStore + SessionRegistry; `mcp/server.py` con SDK oficial Anthropic (Server, list_tools/call_tool/list_prompts/get_prompt/list_resources/read_resource handlers, stdio transport, file logging a `%LOCALAPPDATA%/kestrel/mcp.log`, URI template matching para `kestrel://session/{machine}/...`). Dummy handlers: tool `kestrel_ping`, tool `kestrel_version`, resource `kestrel://config`, prompt `kestrel_kickoff`. Examples `claude-{code,desktop}-mcp.json`. 18 tests.
+- **Fase 5 — MCP server boilerplate**: `mcp/registry.py` decoradores `@tool/@prompt/@resource` + JSON schema inference desde type hints; `mcp/context.py` singleton ServerContext con StateStore + SessionRegistry; `mcp/server.py` con SDK oficial Anthropic (Server, list_tools/call_tool/list_prompts/get_prompt/list_resources/read_resource handlers, stdio transport, file logging a `%LOCALAPPDATA%/kestrel/mcp.log`, URI template matching para `kestrel://session/{machine}/...`). Dummy handlers: tool `kestrel_ping`, tool `kestrel_version`, resource `kestrel://config`, prompt `kestrel_kickoff`. Examples `claude-{code,desktop}-mcp.json`. 18 tests. **Handshake post CC restart validado 2026-05-20.**
+- **Fase 6 — Tools MCP por categoría**: **70 tools registrados en 19 categorías** (supera target ≥50):
+  - `state` (4): read, write_machine, append_event, session_dir
+  - `phase` (2): current, enter (returns guidance + suggested tools + HITL gates)
+  - `narrate` (1): emit (📡 🔍 💡 ➡)
+  - `htb` (6): list_machines, machine_info, spawn, release, submit_flag, profile_update
+  - `vpn` (3): up, down, status (htb-vpn.sh wrapper via Kali SSH)
+  - `kali` (2): status, ping_target
+  - `recon` (6): nmap_scan (4 profiles), service_probe, web_fingerprint, smb_enum, dns_enum, ldap_enum
+  - `intel` (4): classify_blind, kb_query (graceful), cve_lookup (4-stage KB→NVD→ExploitDB→MSF), save_synthesis
+  - `vuln` (4): nuclei_targeted, nuclei_broad, check_exploit_db, msf_search (RPC graceful)
+  - `creds` (6): default_check, password_spray, hash_recommend, hash_crack, hash_status, save_tried
+  - `exploit` (6): run_msf (RPC + session_id wait), run_poc, web_lfi, web_rce, smb_psexec (pth auto), winrm (evil-winrm)
+  - `post` (8): linpeas_run, winpeas_run, enum_user, enum_system, privesc_kernel, privesc_sudo (gtfobins), check_token, privesc_potato
+  - `ad` (4): bloodhound_collect, kerberoast, asreproast, dcsync (impacket)
+  - `session` (4): open (ssh/winrm/msf), exec, close, list
+  - `flag` (2): extract (linux/windows), validate (HTB 32-hex)
+  - `writeup` (3): generate (Jinja2 template), kb_synthesize (anti-spoiler), publish_hint (emit.py subprocess)
+  - `heartbeat` (2): stuck_check (5 signals + recommend), heartbeat_status (dashboard wrap)
+  - `hitl` (1): request_user_confirmation con `_hitl: true` marker contract
+  - `meta` (2): kestrel_ping, kestrel_version
+  - +132 tests nuevos en este fase.
+- **Fase 7 — Prompts MCP**: 10 prompts Jinja2 registrados (`kestrel_kickoff`, `p0_setup`..`p5_close`, `intel_synthesis_template`, `hint_generation`, `debrief_template`). El kickoff y phase prompts interpolan estado en vivo; intel/hint/debrief son templates. +11 tests.
+- **Fase 8 — Resources MCP**: 10 URIs registrados (`kestrel://state/{last-cycle,sessions-jsonl,profile}`, `kestrel://session/{machine}/{intel,recon,findings,fingerprint,writeup}`, `kestrel://kb/categories`, `kestrel://config`). Template matching para session URIs. +10 tests.
+- **Fase 9 — CLI completo**: `kestrel {version,mcp,agent,status,fingerprint,config init/show,state show,debug tools-list/ssh-exec/msfrpc-ping}`. +12 tests via Typer's CliRunner.
+- **Fase 10 — Skill `/kestrel` thin rewrite**: `.claude/skills/kestrel/SKILL.md` reescrito a 105 líneas (down 134). Powered by MCP server. Sub-comandos `/kestrel hint/status/resume` mapean a tool/prompt calls explícitos. NO toca `phases/` aún (cutover en Fase 13).
+- **Fase 11 — Tests + CI**: 313 tests pasan + 16 skipped (POSIX-only bash tests). `.github/workflows/test.yml` actualizado: matrix Ubuntu+Windows × Python 3.11+3.12, lint con ruff, e2e job gated por tag `v0.4*`.
+- **Fase 12 — Docs**: `docs/architecture.md` v0.4 con 5-layer model (MCP protocol added), `docs/tools-reference.md` autogenerado por `scripts/gen_tools_reference.py` (70 tools + 10 prompts + 10 resources), `docs/prompts-reference.md` nuevo, `docs/public-usage.md` nuevo (setup CC + Desktop + env vars + troubleshooting). `examples/claude-{code,desktop}-mcp.json` ya existen desde Fase 5.
+- **Fase 13 — Cutover**: pendiente (eliminar `phases/` skill después de confirmar archive en `docs/v03-phases-archive/`, commit branch + tag `v0.4.0-rc1` local).
 
-**Pendiente:**
-- Validación handshake CC restart (config en `~/.claude/mcp_servers.json` ya agregada).
-- Fase 6: 50+ tools por categoría (state/phase/narrate, htb, vpn/kali, recon, intel, vuln, creds/exploit/post/ad, session, flag/writeup/HITL/heartbeat).
-- Fases 7-13: prompts MCP, resources completos, CLI completo (debug subcommands), skill `/kestrel` thin rewrite, tests + CI, docs (architecture v0.4, tools-reference, public-usage), cutover.
-- Check final + E2E Lame target ≤10min con HITL 3-4.
-- Tag `v0.4.0-rc1` post-E2E, después `v0.4.0` + GitHub Release.
+**Pendiente final:**
+- Check final completo (manual desde CC nueva sesión).
+- E2E Lame ≤10min con HITL 3-4 via MSF usermap_script.
+- Tag `v0.4.0` + push origin + GitHub Release post-E2E ok.
 
-**Tests al cierre PARTIAL**: 148 pass, 16 skip, 0 fail.
+**Tests al cierre**: **313 pass, 16 skip, 0 fail**. Coverage no medido formalmente pero conservador (mocks cubren ~80% del happy path por categoría).
 
 ---
 
