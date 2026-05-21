@@ -70,6 +70,7 @@ async def session_open(transport: str, params: dict[str, Any]) -> dict[str, Any]
     category="session",
 )
 async def session_exec(handle_id: str, cmd: str, timeout: float = 120.0) -> dict[str, Any]:
+    timeout = float(timeout)  # coerce — MCP JSON may deliver numeric args as strings
     ctx = mcp_context.get_context()
     sess = ctx.sessions.get(handle_id)
     if sess is None:
@@ -102,6 +103,29 @@ async def session_close(handle_id: str) -> dict[str, Any]:
     except Exception as exc:
         return {"handle_id": handle_id, "close_error": str(exc)}
     return {"handle_id": handle_id, "closed": True}
+
+
+@registry.tool(
+    name="session_upload",
+    description=(
+        "Upload a string (script content) to a remote path via SFTP on the given SSH session. "
+        "Returns {uploaded: true, remote_path}. Use this instead of heredocs for complex scripts — "
+        "write content here, then session_exec to run it."
+    ),
+    category="session",
+)
+async def session_upload(handle_id: str, content: str, remote_path: str) -> dict[str, Any]:
+    ctx = mcp_context.get_context()
+    sess = ctx.sessions.get(handle_id)
+    if sess is None:
+        return {"error": "unknown_handle", "handle_id": handle_id}
+    if not hasattr(sess, "upload_string"):
+        return {"error": "upload_not_supported", "transport": type(sess).__name__}
+    try:
+        await asyncio.to_thread(sess.upload_string, content, remote_path)
+    except Exception as exc:
+        return {"error": "upload_failed", "handle_id": handle_id, "message": str(exc)}
+    return {"uploaded": True, "remote_path": remote_path, "bytes": len(content.encode())}
 
 
 @registry.tool(

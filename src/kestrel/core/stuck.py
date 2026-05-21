@@ -209,6 +209,17 @@ def alternatives_from_findings(findings_md: str) -> list[str]:
         alts.append("database-exposed")
     if "docker" in blob or "2375" in blob:
         alts.append("docker-escape")
+    # ICS / OT / industrial control systems
+    if "opc-ua" in blob or "opc ua" in blob or "4840" in blob or "opcua" in blob:
+        alts.append("opcua-browse-full")
+    if "nifi" in blob or "apache nifi" in blob:
+        alts.append("nifi-groovy-exec")
+    if "modbus" in blob or "502" in blob or "dnp3" in blob or "scada" in blob:
+        alts.append("ics-protocol-enum")
+    if "maintenance" in blob or "plc" in blob or "helix" in blob:
+        alts.append("ics-service-check")
+    if "support-bundle" in blob or "support_bundle" in blob or "backup" in blob:
+        alts.append("backup-file-enum")
     return list(dict.fromkeys(alts))
 
 

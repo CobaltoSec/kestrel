@@ -139,3 +139,66 @@ def test_session_close_removes_from_registry(fresh_ctx, monkeypatch):
 def test_session_close_unknown_handle(fresh_ctx):
     result = asyncio.run(session_tools.session_close(handle_id="ghost"))
     assert result["error"] == "unknown_handle"
+
+
+def test_session_exec_timeout_string_coercion(fresh_ctx, monkeypatch):
+    """session_exec must accept timeout as string (MCP JSON delivers numbers as strings sometimes)."""
+    received_timeout: list[float] = []
+
+    class FakeSSH(StubSession):
+        def __init__(self, **kwargs):
+            super().__init__(handle_id="ssh-coerce")
+
+        def exec(self, cmd: str, timeout: float = 120.0) -> ExecResult:
+            received_timeout.append(timeout)
+            return ExecResult(stdout="ok", stderr="", rc=0, duration_s=0.01)
+
+    monkeypatch.setattr(session_tools, "SSHSession", FakeSSH)
+    asyncio.run(session_tools.session_open(transport="ssh", params={"host": "h", "user": "u"}))
+    res = asyncio.run(session_tools.session_exec(handle_id="ssh-coerce", cmd="id", timeout="30"))
+    assert res["rc"] == 0
+    assert isinstance(received_timeout[0], float)
+    assert received_timeout[0] == 30.0
+
+
+def test_session_upload_success(fresh_ctx, monkeypatch):
+    uploaded: dict = {}
+
+    class FakeSSH(StubSession):
+        def __init__(self, **kwargs):
+            super().__init__(handle_id="ssh-upload")
+
+        def upload_string(self, content: str, remote_path: str) -> None:
+            uploaded["content"] = content
+            uploaded["path"] = remote_path
+
+    monkeypatch.setattr(session_tools, "SSHSession", FakeSSH)
+    asyncio.run(session_tools.session_open(transport="ssh", params={"host": "h", "user": "u"}))
+    res = asyncio.run(session_tools.session_upload(
+        handle_id="ssh-upload", content="print('hello')", remote_path="/tmp/test.py"
+    ))
+    assert res["uploaded"] is True
+    assert res["remote_path"] == "/tmp/test.py"
+    assert uploaded["content"] == "print('hello')"
+
+
+def test_session_upload_unknown_handle(fresh_ctx):
+    res = asyncio.run(session_tools.session_upload(
+        handle_id="ghost", content="x", remote_path="/tmp/x"
+    ))
+    assert res["error"] == "unknown_handle"
+
+
+def test_session_upload_unsupported_transport(fresh_ctx, monkeypatch):
+    """Sessions without upload_string return upload_not_supported."""
+
+    class FakeSSH(StubSession):
+        def __init__(self, **kwargs):
+            super().__init__(handle_id="ssh-noup")
+
+    monkeypatch.setattr(session_tools, "SSHSession", FakeSSH)
+    asyncio.run(session_tools.session_open(transport="ssh", params={"host": "h", "user": "u"}))
+    res = asyncio.run(session_tools.session_upload(
+        handle_id="ssh-noup", content="x", remote_path="/tmp/x"
+    ))
+    assert res["error"] == "upload_not_supported"

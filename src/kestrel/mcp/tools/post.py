@@ -170,6 +170,39 @@ async def post_check_token(whoami_priv_output: str) -> dict[str, Any]:
 
 
 @registry.tool(
+    name="post_check_disk",
+    description=(
+        "Check disk space on target via exec_cmd_template. "
+        "Returns parsed free_pct for each mount. Flags mounts with <10% free as low_space."
+    ),
+    category="post",
+)
+async def post_check_disk(exec_cmd_template: str, os: str = "linux") -> dict[str, Any]:
+    if os.lower().startswith("win"):
+        inner = "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free"
+    else:
+        inner = "df -h 2>/dev/null"
+    cmd = exec_cmd_template.replace("{}", inner) if "{}" in exec_cmd_template else f"{exec_cmd_template} {shlex.quote(inner)}"
+    res = await _run_kali(cmd, timeout=15.0)
+    mounts: list[dict[str, Any]] = []
+    low_space: list[str] = []
+    for line in res["stdout"].splitlines()[1:]:  # skip header
+        parts = line.split()
+        if len(parts) >= 6:
+            use_pct_str = parts[4].rstrip("%")
+            try:
+                use_pct = int(use_pct_str)
+                free_pct = 100 - use_pct
+                mount = {"mount": parts[5], "size": parts[1], "used": parts[2], "avail": parts[3], "use_pct": use_pct, "free_pct": free_pct}
+                mounts.append(mount)
+                if free_pct < 10:
+                    low_space.append(parts[5])
+            except (ValueError, IndexError):
+                continue
+    return {"rc": res["rc"], "mounts": mounts, "low_space_mounts": low_space, "raw": res["stdout"]}
+
+
+@registry.tool(
     name="post_privesc_potato",
     description=(
         "Suggest the right Potato variant based on Windows build + privilege. variant is informational; "
