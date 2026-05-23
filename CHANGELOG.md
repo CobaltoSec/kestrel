@@ -8,6 +8,21 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v0.5.0-dev (RT-KESTREL-V05-W4-O2 — Intel Tools)
+
+**+2 MCP tools en categoría `intel`:**
+- `intel_next_step(phase, findings, tried, os_hint, session_dir)` — consulta KB pgvector dado estado del engagement, filtra caminos ya intentados (Jaccard ≥0.6), detecta señales stuck (shell_lost/hash_stuck/cred_exhausted), fallback a templates builtin por fase. Retorna pasos priorizados con comandos exactos.
+- `lolbin_suggest(binaries, context, os)` — dado inventario de binarios, consulta GTFOBins/LOLBAS en KB concurrentemente (asyncio.gather). Retorna técnicas explotables por binario con comandos.
+
+**Improvements sobre intel_next_step:**
+- Stuck signals auto-detect: wiring a `kestrel.core.stuck`, prepend recovery step (priority 1, source="stuck")
+- Jaccard fuzzy dedup: threshold 0.6, strip annotations em-dash/en-dash antes de comparar
+- Templates builtin por fase: p2_enum / p3_foothold / p4_privesc como fallback sin KB
+
+**Tests:** 38 test_tools_intel + 347 suite total (+ 16 skip).
+
+---
+
 ### v0.4.0-dev (RT-KESTREL-V04 — MCP Pivot)
 
 Branch `feat/v04-mcp-pivot`. **15/16 fases del plan completas** (pendiente: E2E Lame final).

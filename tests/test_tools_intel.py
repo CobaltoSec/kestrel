@@ -1,8 +1,9 @@
-"""Tests for kestrel.mcp.tools.intel — classify/kb_query/cve_lookup/save_synthesis."""
+"""Tests for kestrel.mcp.tools.intel — classify/kb_query/cve_lookup/save_synthesis/next_step/lolbin."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -201,3 +202,459 @@ def test_save_synthesis_invalid_confidence(fresh_ctx):
         )
     )
     assert result["error"] == "invalid_confidence"
+
+
+# ── intel_next_step ──────────────────────────────────────────────────────────
+
+
+class FakeSmartNextStep:
+    @staticmethod
+    def smart_search(query, top_k=5):
+        return (
+            [
+                {
+                    "content": "sudo find / -exec /bin/sh \\; — SUID find privesc",
+                    "metadata": {"source": "gtfobins/find"},
+                    "score": 0.91,
+                },
+                {
+                    "content": "python3 -c 'import os; os.setuid(0); os.system(\"/bin/bash\")'",
+                    "metadata": {"source": "gtfobins/python"},
+                    "score": 0.88,
+                },
+                {
+                    "content": "linpeas.sh — automated linux privesc enum script",
+                    "metadata": {"source": "htb/privesc"},
+                    "score": 0.75,
+                },
+            ],
+            None,
+        )
+
+
+def test_next_step_returns_steps_structure(fresh_ctx, monkeypatch):
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartNextStep)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=[],
+            findings=["SUID find binary", "python3 available"],
+            os_hint="linux",
+            top_k=5,
+        )
+    )
+    assert result["machine"] == "lame"
+    assert result["phase"] == "p4_privesc"
+    assert result["kb_available"] is True
+    assert isinstance(result["steps"], list)
+    assert len(result["steps"]) > 0
+    step = result["steps"][0]
+    assert "priority" in step
+    assert "action" in step
+    assert "command" in step
+    assert "rationale" in step
+    assert "source" in step
+    assert step["priority"] == 1
+
+
+def test_next_step_stuck_signals_key_present(fresh_ctx, monkeypatch):
+    """stuck_signals always present in return dict even when no session_dir given."""
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartNextStep)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=[],
+            findings=[],
+        )
+    )
+    assert "stuck_signals" in result
+    assert isinstance(result["stuck_signals"], list)
+
+
+def test_next_step_filters_tried(fresh_ctx, monkeypatch):
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartNextStep)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=["sudo find / -exec /bin/sh"],
+            findings=["SUID find binary"],
+            os_hint="linux",
+        )
+    )
+    commands = [s["command"] for s in result["steps"]]
+    assert not any("find" in c and "exec" in c for c in commands)
+
+
+def test_next_step_fallback_when_kb_unavailable(fresh_ctx, monkeypatch):
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=[],
+            findings=[],
+            os_hint="linux",
+        )
+    )
+    assert result["kb_available"] is False
+    assert len(result["steps"]) > 0
+    assert any(s["source"] == "builtin" for s in result["steps"])
+
+
+def test_next_step_fallback_richer_p4(fresh_ctx, monkeypatch):
+    """IMPROVEMENT-3: p4_privesc fallback now has ≥ 8 templates."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=[],
+            findings=[],
+            top_k=10,
+        )
+    )
+    assert len(result["steps"]) >= 8
+    actions = {s["action"] for s in result["steps"]}
+    assert "capabilities_check" in actions
+    assert "cron_writable" in actions
+    assert "path_hijack" in actions
+    assert "group_check" in actions
+
+
+def test_next_step_fallback_richer_p2(fresh_ctx, monkeypatch):
+    """IMPROVEMENT-3: p2_enum fallback includes ICS/OT and docker templates."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p2_enum",
+            tried=[],
+            findings=[],
+            top_k=10,
+        )
+    )
+    assert len(result["steps"]) >= 8
+    actions = {s["action"] for s in result["steps"]}
+    assert "ics_ot_scan" in actions
+    assert "docker_api_check" in actions
+    assert "nifi_check" in actions
+
+
+def test_next_step_fallback_richer_p3(fresh_ctx, monkeypatch):
+    """IMPROVEMENT-3: p3_foothold has rce_verify + ssh_key_hunt + config_creds_hunt."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3_foothold",
+            tried=[],
+            findings=[],
+            top_k=10,
+        )
+    )
+    actions = {s["action"] for s in result["steps"]}
+    assert "rce_verify" in actions
+    assert "ssh_key_hunt" in actions
+    assert "config_creds_hunt" in actions
+
+
+def test_next_step_stuck_shell_lost_prepended(fresh_ctx, monkeypatch, tmp_path):
+    """IMPROVEMENT-1: shell_lost signal → reset_listener step prepended at priority 1."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    sdir = tmp_path / "sessions" / "lame"
+    sdir.mkdir(parents=True)
+    (sdir / "estado.md").write_text("shell dead — connection reset by peer")
+    (sdir / "findings.md").write_text("")
+    (sdir / "sessions.jsonl").write_text("")
+
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3_foothold",
+            tried=[],
+            findings=[],
+            session_dir=str(sdir),
+        )
+    )
+    assert "shell_lost" in result["stuck_signals"]
+    assert result["steps"][0]["action"] == "reset_listener"
+    assert result["steps"][0]["source"] == "stuck"
+    assert result["steps"][0]["priority"] == 1
+
+
+def test_next_step_stuck_hash_stuck_prepended(fresh_ctx, monkeypatch, tmp_path):
+    """IMPROVEMENT-1: hash_stuck signal → escalate_gpu step prepended at priority 1."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    sdir = tmp_path / "sessions" / "lame"
+    sdir.mkdir(parents=True)
+    (sdir / "estado.md").write_text("hashcat exhausted — no match in 60 min")
+    (sdir / "findings.md").write_text("")
+    (sdir / "sessions.jsonl").write_text("")
+
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=[],
+            findings=[],
+            session_dir=str(sdir),
+        )
+    )
+    assert "hash_stuck" in result["stuck_signals"]
+    assert result["steps"][0]["action"] == "escalate_gpu"
+    assert result["steps"][0]["priority"] == 1
+
+
+def test_next_step_stuck_cred_exhausted_prepended(fresh_ctx, monkeypatch, tmp_path):
+    """IMPROVEMENT-1: cred_exhausted → pivot_vector step prepended."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    sdir = tmp_path / "sessions" / "lame"
+    sdir.mkdir(parents=True)
+    (sdir / "estado.md").write_text("spray exhausted — ninguna cred funciona")
+    (sdir / "findings.md").write_text("")
+    (sdir / "sessions.jsonl").write_text("")
+
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3_foothold",
+            tried=[],
+            findings=[],
+            session_dir=str(sdir),
+        )
+    )
+    assert "cred_exhausted" in result["stuck_signals"]
+    assert result["steps"][0]["action"] == "pivot_vector"
+    assert result["steps"][0]["priority"] == 1
+
+
+def test_next_step_no_stuck_signals_when_dir_missing(fresh_ctx, monkeypatch):
+    """IMPROVEMENT-1 fallback: nonexistent session_dir → no stuck signals, normal flow."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p2_enum",
+            tried=[],
+            findings=[],
+            session_dir="/nonexistent/path/session",
+        )
+    )
+    assert result["stuck_signals"] == []
+    assert len(result["steps"]) > 0
+
+
+def test_next_step_query_includes_phase_and_findings(fresh_ctx, monkeypatch):
+    captured: list[str] = []
+
+    class CapturingFake:
+        @staticmethod
+        def smart_search(query, top_k=5):
+            captured.append(query)
+            return ([], None)
+
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: CapturingFake)
+    asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3_foothold",
+            tried=[],
+            findings=["Samba 3.0.20"],
+            os_hint="linux",
+        )
+    )
+    assert len(captured) == 1
+    query = captured[0]
+    assert "foothold" in query
+    assert "Samba" in query or "samba" in query.lower()
+    assert "linux" in query
+
+
+def test_next_step_priority_renumbered_after_filter(fresh_ctx, monkeypatch):
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartNextStep)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=["sudo find / -exec /bin/sh"],
+            findings=[],
+        )
+    )
+    priorities = [s["priority"] for s in result["steps"]]
+    assert priorities == list(range(1, len(priorities) + 1))
+
+
+def test_next_step_empty_machine_returns_dict(fresh_ctx, monkeypatch):
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="unknown_box",
+            current_phase="p2_enum",
+            tried=[],
+            findings=[],
+        )
+    )
+    assert "steps" in result
+    assert "query_used" in result
+
+
+# ── IMPROVEMENT-2: Jaccard similarity unit tests ──────────────────────────────
+
+
+def test_jaccard_similarity_identical():
+    a = {"sudo", "-l", "2>/dev/null"}
+    assert intel_tools._jaccard_similarity(a, a) == 1.0
+
+
+def test_jaccard_similarity_disjoint():
+    a = {"sudo", "-l"}
+    b = {"nmap", "-sV"}
+    assert intel_tools._jaccard_similarity(a, b) == 0.0
+
+
+def test_jaccard_similarity_partial():
+    a = {"sudo", "-l"}
+    b = {"sudo", "-l", "2>/dev/null"}
+    # |A∩B|=2, |A∪B|=3
+    assert abs(intel_tools._jaccard_similarity(a, b) - 2 / 3) < 1e-9
+
+
+def test_jaccard_both_empty():
+    assert intel_tools._jaccard_similarity(set(), set()) == 1.0
+
+
+def test_chunk_matches_tried_jaccard_variant(monkeypatch):
+    """IMPROVEMENT-2: 'sudo -l 2>/dev/null' matches tried 'sudo -l' via Jaccard ≥ 0.6."""
+    chunk_text = "sudo -l 2>/dev/null — check sudo permissions"
+    assert intel_tools._chunk_matches_tried(chunk_text, ["sudo -l"]) is True
+
+
+def test_chunk_matches_tried_dissimilar_not_filtered(monkeypatch):
+    """Unrelated tried command must NOT filter an unrelated chunk."""
+    chunk_text = "getcap -r / 2>/dev/null — check linux capabilities"
+    assert intel_tools._chunk_matches_tried(chunk_text, ["nmap -sV -p 80"]) is False
+
+
+# ── lolbin_suggest ───────────────────────────────────────────────────────────
+
+
+class FakeSmartLolbin:
+    @staticmethod
+    def smart_search(query, top_k=5):
+        if "find" in query:
+            return (
+                [{"content": "find / -exec /bin/sh \\;", "metadata": {"source": "gtfobins"}, "score": 0.93}],
+                None,
+            )
+        if "vim" in query:
+            return (
+                [{"content": ":!/bin/bash — vim shell escape", "metadata": {"source": "gtfobins"}, "score": 0.89}],
+                None,
+            )
+        return ([], None)
+
+
+def test_lolbin_suggest_structure(fresh_ctx, monkeypatch):
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartLolbin)
+    result = asyncio.run(
+        intel_tools.lolbin_suggest(
+            binaries=["find", "vim", "curl"],
+            context="SUID",
+            os_hint="linux",
+            top_k_per_binary=2,
+        )
+    )
+    assert "suggestions" in result
+    assert "binaries_with_hits" in result
+    assert "binaries_queried" in result
+    assert set(result["binaries_queried"]) == {"find", "vim", "curl"}
+    assert "find" in result["suggestions"]
+    assert "vim" in result["suggestions"]
+    assert "curl" in result["suggestions"]
+
+
+def test_lolbin_suggest_hits_populated(fresh_ctx, monkeypatch):
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartLolbin)
+    result = asyncio.run(
+        intel_tools.lolbin_suggest(binaries=["find", "vim"], context="sudo nopasswd")
+    )
+    assert "find" in result["binaries_with_hits"]
+    assert "vim" in result["binaries_with_hits"]
+    find_tech = result["suggestions"]["find"][0]
+    assert "technique" in find_tech
+    assert "command" in find_tech
+    assert "source" in find_tech
+
+
+def test_lolbin_suggest_no_hits_binary_absent_from_hits(fresh_ctx, monkeypatch):
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: FakeSmartLolbin)
+    result = asyncio.run(
+        intel_tools.lolbin_suggest(binaries=["curl"], context="SUID", os_hint="linux")
+    )
+    assert "curl" not in result["binaries_with_hits"]
+    assert result["suggestions"]["curl"] == []
+
+
+def test_lolbin_suggest_empty_binaries(fresh_ctx, monkeypatch):
+    result = asyncio.run(intel_tools.lolbin_suggest(binaries=[]))
+    assert result["suggestions"] == {}
+    assert result["binaries_with_hits"] == []
+    assert result["binaries_queried"] == []
+
+
+def test_lolbin_suggest_kb_unavailable_fallback(fresh_ctx, monkeypatch):
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.lolbin_suggest(binaries=["python3", "nc"], context="SUID")
+    )
+    assert "python3" in result["suggestions"]
+    assert "nc" in result["suggestions"]
+    assert result["binaries_with_hits"] == []
+
+
+def test_lolbin_suggest_deduplicates_binaries(fresh_ctx, monkeypatch):
+    """QW: duplicate binary names must only generate one KB query each."""
+    call_log: list[str] = []
+
+    class LoggingFake:
+        @staticmethod
+        def smart_search(query, top_k=5):
+            call_log.append(query)
+            return ([], None)
+
+    monkeypatch.setattr(intel_tools, "_try_import_kb_smart", lambda: LoggingFake)
+    result = asyncio.run(
+        intel_tools.lolbin_suggest(binaries=["find", "find", "vim", "vim", "vim"])
+    )
+    # Only 2 unique binaries → 2 KB calls
+    assert len(call_log) == 2
+    assert result["binaries_queried"] == ["find", "vim"]
+
+
+# ── QW: intel_cve_lookup concurrent execution ────────────────────────────────
+
+
+def test_cve_lookup_concurrent_stages(fresh_ctx, monkeypatch):
+    """QW: KB and NVD are now launched with asyncio.gather — both results present."""
+    kb_called = []
+    nvd_called = []
+
+    async def fake_kb(query, top_k=5):
+        kb_called.append(query)
+        return {"available": True, "query": query, "chunks": []}
+
+    async def fake_nvd(product, version):
+        nvd_called.append((product, version))
+        return [{"cve_id": "CVE-2007-2447", "description": "Samba RCE", "published": "2007"}]
+
+    monkeypatch.setattr(intel_tools, "intel_kb_query", fake_kb)
+    monkeypatch.setattr(intel_tools, "_nvd_lookup", fake_nvd)
+    monkeypatch.setattr(intel_tools, "_exploitdb_local_lookup", lambda p, v: [])
+
+    result = asyncio.run(intel_tools.intel_cve_lookup(product="samba", version="3.0.20"))
+    assert len(kb_called) == 1
+    assert len(nvd_called) == 1
+    assert result["stages"]["nvd"][0]["cve_id"] == "CVE-2007-2447"
