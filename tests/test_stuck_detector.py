@@ -252,3 +252,72 @@ def test_lab_unstable_old_events_ignored(tmp_path: Path):
     )
     code, out = run(session)
     assert "lab_unstable" not in out["signals"]
+
+
+# ─── IMP-06 — rabbit_hole detection ──────────────────────────────────────────
+
+
+def test_rabbit_hole_same_narrate_text_detected(tmp_path: Path):
+    """IMP-06: same 🔍 narrate text ≥3 times in window → rabbit_hole signal."""
+    ts = _now_ts()
+    text = "curl http://10.10.10.1/test returns 404"
+    session = make_session(
+        tmp_path,
+        jsonl_lines=[
+            {"ts": ts, "event": "narrate", "stream": "🔍", "detail": text},
+            {"ts": ts, "event": "narrate", "stream": "🔍", "detail": text},
+            {"ts": ts, "event": "narrate", "stream": "🔍", "detail": text},
+        ],
+    )
+    code, out = run(session)
+    assert code == 1
+    assert "rabbit_hole" in out["signals"]
+    assert out["recommendation"] == "switch_vector"
+
+
+def test_rabbit_hole_consecutive_events_detected(tmp_path: Path):
+    """IMP-06: same event detail ≥4 consecutive times → rabbit_hole signal."""
+    ts = _now_ts()
+    detail = "gobuster /admin always 403"
+    session = make_session(
+        tmp_path,
+        jsonl_lines=[
+            {"ts": ts, "event": "recon_attempt", "detail": detail},
+            {"ts": ts, "event": "recon_attempt", "detail": detail},
+            {"ts": ts, "event": "recon_attempt", "detail": detail},
+            {"ts": ts, "event": "recon_attempt", "detail": detail},
+        ],
+    )
+    code, out = run(session)
+    assert code == 1
+    assert "rabbit_hole" in out["signals"]
+
+
+def test_rabbit_hole_not_detected_when_varied(tmp_path: Path):
+    """IMP-06: varied narrate texts below threshold → no rabbit_hole."""
+    ts = _now_ts()
+    session = make_session(
+        tmp_path,
+        jsonl_lines=[
+            {"ts": ts, "event": "narrate", "stream": "🔍", "detail": "curl /admin → 200"},
+            {"ts": ts, "event": "narrate", "stream": "🔍", "detail": "gobuster found /config"},
+            {"ts": ts, "event": "narrate", "stream": "🔍", "detail": "nmap port 8080 open"},
+        ],
+    )
+    code, out = run(session)
+    assert "rabbit_hole" not in out["signals"]
+
+
+def test_rabbit_hole_old_events_ignored(tmp_path: Path):
+    """IMP-06: 3 same-text events but older than 20min window → no rabbit_hole."""
+    text = "curl http://10.10.10.1/ returns 403"
+    session = make_session(
+        tmp_path,
+        jsonl_lines=[
+            {"ts": "2026-01-01T00:00:00Z", "event": "narrate", "stream": "🔍", "detail": text},
+            {"ts": "2026-01-01T00:01:00Z", "event": "narrate", "stream": "🔍", "detail": text},
+            {"ts": "2026-01-01T00:02:00Z", "event": "narrate", "stream": "🔍", "detail": text},
+        ],
+    )
+    code, out = run(session)
+    assert "rabbit_hole" not in out["signals"]

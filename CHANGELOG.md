@@ -8,6 +8,47 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v0.6.0 (RT-KESTREL-V06 — Operational Hardening Sprint)
+
+**9 mejoras de seguridad operacional (2026-06-14):**
+
+#### IMP-05 — `recon_web_dirfuzz` (nueva tool)
+- `mcp/tools/recon.py`: nueva herramienta `recon_web_dirfuzz` — feroxbuster (fallback gobuster) sobre Kali. Acepta `wordlist`, `extensions`, `depth`. Parsea stdout feroxbuster (STATUS SIZE WORDS METHOD URL). Guarda artefacto en `<session_dir>/recon/dirfuzz/`.
+
+#### IMP-06 — Rabbit hole detection
+- `core/stuck.py`: `detect_rabbit_hole()` — dos señales: mismo texto 🔍 ≥3 veces en 20 min O mismo event detail ≥4 consecutivos. Integrado en `recommend()` con prioridad máxima.
+- `mcp/tools/intel.py`: `intel_next_step` consume señal `rabbit_hole` → paso `pivot_away` inyectado.
+
+#### IMP-11 — Debrief hard stop
+- `mcp/tools/htb.py`: `htb_release()` verifica `feedback.md` con 5 secciones (## 1.–## 5.) antes de llamar a la API HTB. Gate `_hitl: True` si incompleto. Override con `force=True`.
+
+#### IMP-14 — Hash cracking policy
+- `mcp/tools/creds.py`: `creds_hash_crack()` bloquea bcrypt/argon2/scrypt (CPU infeasible) — retorna `error: hash_policy_blocked` con escalation hint. Fast hashes reciben `--optimized-kernel-enable`.
+
+#### IMP-15 — HITL cleanup gate
+- `mcp/tools/session.py`: `session_close()` requiere `current_phase ∈ {p5_close, p6_cleanup}`. Fuera de esa ventana retorna `_hitl: True`. Override con `force=True`.
+
+#### IMP-16 — Endpoint gate
+- `mcp/tools/recon.py`: `recon_web_fingerprint()` y `recon_web_dirfuzz()` saltan si el URL ya está en `tried_endpoints` con `interesting=False`.
+
+#### IMP-18 — Auto-narrate en tools pesados
+- `recon_nmap_scan`, `recon_web_dirfuzz`, `recon_smb_enum` → `📡` stream.
+- `creds_hash_crack`, `creds_password_spray` → `💡` stream.
+- Helper `_auto_narrate()` en recon.py, swallows exceptions silenciosamente.
+
+#### IMP-19 — Source of truth unification
+- `recon_web_fingerprint` auto-guarda en `tried_endpoints` (path, status, interesting).
+- `recon_web_dirfuzz` auto-guarda paths descubiertos en `tried_endpoints`.
+- `creds_hash_crack` auto-guarda en `tried_hashes` (hash_preview, type, wordlist, result).
+- `creds_password_spray` auto-guarda usuarios exitosos en `tried_credentials`.
+
+#### IMP-20 — Fingerprint: Jenkins / Elasticsearch / Jupyter
+- `core/fingerprint.py`: 3 nuevas reglas (ports + banner signals), 3 entradas en `FRAMEWORK_CATEGORIES`, 3 en `STATIC_ALTERNATIVES`.
+
+**Tests:** ≥415 passed, 16 skipped.
+
+---
+
 ### v0.5.0 (RT-KESTREL-V05 — Blind Effectiveness Sprint)
 
 **10 mejoras de confiabilidad e inteligencia blind (2026-06-14):**

@@ -15,6 +15,22 @@ from kestrel.mcp import registry
 from kestrel.transport import kali_proxy
 
 
+# IMP-14: hash types that require GPU — CPU cracking is futile
+_GPU_ONLY_HASH_MODES = frozenset({
+    "3200",     # bcrypt $2*$
+    "13400",    # KeePass (argon2)
+    "8900",     # scrypt
+    "11300",    # Bitcoin/Litecoin wallet.dat
+    "13721",    # VeraCrypt PBKDF2-HMAC-SHA512 + AES
+})
+_GPU_ONLY_PREFIXES = ("$2a$", "$2b$", "$2y$", "$argon2")
+
+
+def _is_gpu_only(hash_type: str, hash_value: str) -> bool:
+    ht = hash_type.strip().lower()
+    return ht in _GPU_ONLY_HASH_MODES or any(hash_value.startswith(p) for p in _GPU_ONLY_PREFIXES)
+
+
 SERVICE_DEFAULTS: dict[str, list[tuple[str, str]]] = {
     "ssh": [("root", "root"), ("root", "toor"), ("admin", "admin"), ("kali", "kali")],
     "mysql": [("root", ""), ("root", "root"), ("mysql", "mysql"), ("admin", "admin")],
@@ -80,10 +96,10 @@ async def creds_default_check(service: str, target: str, port: int | None = None
     category="creds",
 )
 async def creds_password_spray(
-    target: str, users: list[str], password: str, protocol: str = "smb"
+    target: str, users: list[str], password: str, protocol: str = "smb",
+    machine: str | None = None,
 ) -> dict[str, Any]:
     users_payload = "\n".join(users)
-    # write a temp file on Kali via heredoc
     cmd = (
         f"set -e; tmpf=$(mktemp); printf '%s' {shlex.quote(users_payload)} > $tmpf; "
         f"nxc {shlex.quote(protocol)} {shlex.quote(target)} -u $tmpf -p {shlex.quote(password)} --continue-on-success; "
@@ -94,6 +110,28 @@ async def creds_password_spray(
     for line in res["stdout"].splitlines():
         if "[+]" in line:
             successes.append(line.strip())
+
+    # IMP-18: auto-narrate spray result
+    try:
+        from kestrel.mcp.tools.narrate import narrate_emit
+        await narrate_emit(stream="💡", text=f"spray {protocol} {target}: {len(successes)} hits", machine=machine)
+    except Exception:
+        pass
+
+    # IMP-19: auto-save successful credentials to state
+    if machine and successes:
+        try:
+            ctx = mcp_context.get_context()
+            m = ctx.state_store.get_machine(machine)
+            existing = [c.model_dump(mode="json") for c in (m.tried_credentials if m else [])]
+            for user in users:
+                # mark as success if their name appears in any success line
+                if any(user.lower() in s.lower() for s in successes):
+                    existing.append({"user": user, "password": password, "service": protocol, "result": "success", "ts": _now_iso()})
+            ctx.state_store.update_machine(machine, {"tried_credentials": existing})
+        except Exception:
+            pass
+
     return {"target": target, "protocol": protocol, "password": password, "success_count": len(successes), "successes": successes, "rc": res["rc"]}
 
 
@@ -147,13 +185,23 @@ async def creds_hash_crack(
     wordlist_path: str,
     rules: str = "none",
     timeout: int = 300,
+    machine: str | None = None,
 ) -> dict[str, Any]:
-    # hash_type translates to hashcat -m mode. We accept either int strings or names.
+    # IMP-14: GPU-only hash policy — block CPU cracking attempt
+    if _is_gpu_only(hash_type, hash_value):
+        return {
+            "error": "hash_policy_blocked",
+            "hash_type": hash_type,
+            "reason": "GPU-only hash — CPU cracking is infeasible (bcrypt/argon2/scrypt).",
+            "escalation": "Use creds_hash_recommend() to plan GPU crack, then crack-helper.sh --async or Colab/Kaggle.",
+        }
+
     rules_arg = f"-r {shlex.quote(rules)}" if rules and rules != "none" else ""
-    # Write the hash to a temp file on Kali to avoid shell escape issues
+    # IMP-14: add --optimized-kernel-enable for fast hashes
     cmd = (
         f"set -e; hf=$(mktemp); printf '%s' {shlex.quote(hash_value)} > $hf; "
-        f"hashcat -m {shlex.quote(hash_type)} $hf {shlex.quote(wordlist_path)} {rules_arg} --quiet --potfile-disable; "
+        f"hashcat -m {shlex.quote(hash_type)} $hf {shlex.quote(wordlist_path)} {rules_arg} "
+        f"--quiet --potfile-disable --optimized-kernel-enable; "
         f"rc=$?; hashcat -m {shlex.quote(hash_type)} $hf {shlex.quote(wordlist_path)} {rules_arg} --show; "
         f"rm -f $hf; exit $rc"
     )
@@ -165,6 +213,34 @@ async def creds_hash_crack(
             if len(parts) == 2:
                 cracked = parts[1].strip()
                 break
+
+    # IMP-18: auto-narrate crack result
+    narrate_text = f"hash_crack {hash_type}: {'cracked ✓' if cracked else 'no_match'}"
+    try:
+        from kestrel.mcp.tools.narrate import narrate_emit
+        await narrate_emit(stream="💡", text=narrate_text, machine=machine)
+    except Exception:
+        pass
+
+    # IMP-19: auto-save tried hash to state
+    if machine:
+        try:
+            ctx = mcp_context.get_context()
+            m = ctx.state_store.get_machine(machine)
+            existing = [h.model_dump(mode="json") for h in (m.tried_hashes if m else [])]
+            existing.append({
+                "hash_preview": hash_value[:20],
+                "type": hash_type,
+                "wordlist": wordlist_path,
+                "rules": rules,
+                "elapsed_s": int(res["duration_s"]),
+                "result": "match" if cracked else "no_match",
+                "ts": _now_iso(),
+            })
+            ctx.state_store.update_machine(machine, {"tried_hashes": existing})
+        except Exception:
+            pass
+
     return {
         "hash_type": hash_type,
         "cracked": cracked,

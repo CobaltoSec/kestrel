@@ -8,11 +8,14 @@ and the parsed summary is returned in the response.
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from kestrel.mcp import context as mcp_context
 from kestrel.mcp import registry
 from kestrel.mcp.tools.state import _resolve_session_dir
 from kestrel.transport import kali_proxy
@@ -114,7 +117,66 @@ def _parse_nmap_xml(xml_text: str) -> dict[str, Any]:
     return {"hosts": hosts_out, "host_count": len(hosts_out)}
 
 
-# ── Tools ────────────────────────────────────────────────────────────────────
+# ── IMP-16/18/19 helpers ─────────────────────────────────────────────────────
+
+
+def _endpoint_url(target: str, port: int) -> str:
+    scheme = "https" if port in (443, 8443) else "http"
+    return f"{scheme}://{target}:{port}/"
+
+
+def _check_endpoint_tried(target: str, port: int, machine: str | None) -> bool:
+    """IMP-16: return True if target:port already in tried_endpoints as not-interesting."""
+    if machine is None:
+        return False
+    try:
+        ctx = mcp_context.get_context()
+        m = ctx.state_store.get_machine(machine)
+        if m is None:
+            return False
+        url = _endpoint_url(target, port)
+        for ep in (m.tried_endpoints or []):
+            if ep.path == url and not ep.interesting:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _save_endpoint_tried(machine: str | None, url: str, status: int | None = None, interesting: bool = False) -> None:
+    """IMP-19: persist a probed endpoint to state.machines[machine].tried_endpoints."""
+    if machine is None:
+        return
+    try:
+        ctx = mcp_context.get_context()
+        m = ctx.state_store.get_machine(machine)
+        existing = list(m.tried_endpoints) if m and m.tried_endpoints else []
+        # avoid duplicates
+        for ep in existing:
+            if ep.path == url:
+                return
+        from kestrel.state.schema import TriedEndpoint
+        existing.append(TriedEndpoint(
+            path=url,
+            status=status,
+            interesting=interesting,
+            ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ))
+        ctx.state_store.update_machine(machine, {"tried_endpoints": [e.model_dump(mode="json") for e in existing]})
+    except Exception:
+        pass
+
+
+async def _auto_narrate(stream: str, text: str, machine: str | None) -> None:
+    """IMP-18: fire-and-forget narration emitted by heavy tools on completion."""
+    try:
+        from kestrel.mcp.tools.narrate import narrate_emit
+        await narrate_emit(stream=stream, text=text, machine=machine)
+    except Exception:
+        pass
+
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
 
 
 @registry.tool(
@@ -143,6 +205,10 @@ async def recon_nmap_scan(
     raw = await _run_kali(cmd, timeout=900.0)
     parsed = _parse_nmap_xml(raw["stdout"])
     artifact = _save_artifact(machine, "nmap", f"{target.replace(':', '_').replace('/', '_')}-{profile}.xml", raw["stdout"])
+    # IMP-18: auto-narrate nmap completion
+    host_count = parsed.get("host_count", 0)
+    port_count = sum(len(h.get("ports", [])) for h in parsed.get("hosts", []))
+    await _auto_narrate("📡", f"nmap {profile} {target}: {host_count} hosts, {port_count} ports open", machine)
     return {
         "target": target,
         "profile": profile,
@@ -201,6 +267,11 @@ async def recon_web_fingerprint(
     port: int = 80,
     machine: str | None = None,
 ) -> dict[str, Any]:
+    # IMP-16: skip if already tried and not interesting
+    if _check_endpoint_tried(target, port, machine):
+        url = _endpoint_url(target, port)
+        return {"skipped": True, "reason": "endpoint_already_tried", "url": url, "machine": machine}
+
     scheme = "https" if port in (443, 8443) else "http"
     url = f"{scheme}://{target}:{port}/"
     cmd = (
@@ -217,10 +288,15 @@ async def recon_web_fingerprint(
         "powered_by": None,
         "title": None,
     }
+    status_code: int | None = None
     for line in headers.splitlines():
         line = line.strip()
         if line.startswith("HTTP/"):
             fp["status_line"] = line
+            try:
+                status_code = int(line.split()[1])
+            except (IndexError, ValueError):
+                pass
         elif line.lower().startswith("server:"):
             fp["server"] = line.split(":", 1)[1].strip()
         elif line.lower().startswith("x-powered-by:"):
@@ -232,6 +308,8 @@ async def recon_web_fingerprint(
         if e > s:
             fp["title"] = body[s:e].strip()
     artifact = _save_artifact(machine, "web", f"{target}_{port}.txt", raw["stdout"])
+    # IMP-19: persist endpoint to state
+    _save_endpoint_tried(machine, url, status=status_code, interesting=bool(fp["title"]))
     return {**fp, "rc": raw["rc"], "artifact": artifact}
 
 
@@ -260,6 +338,8 @@ async def recon_smb_enum(
             if parts and not parts[0].lower().startswith(("sharename", "---")):
                 shares.append(parts[0])
     artifact = _save_artifact(machine, "smb", f"{target}.txt", raw["stdout"])
+    # IMP-18: auto-narrate smb enum result
+    await _auto_narrate("📡", f"smb enum {target}: shares={shares or 'none'}", machine)
     return {
         "target": target,
         "shares_detected": shares,
@@ -313,5 +393,108 @@ async def recon_ldap_enum(
         "target": target,
         "rc": raw["rc"],
         "naming_contexts": naming_contexts,
+        "artifact": artifact,
+    }
+
+
+# IMP-05: recon_web_dirfuzz ───────────────────────────────────────────────────
+
+_DIRFUZZ_LINE_RE = re.compile(
+    r"^\s*(\d{3})\s+.*?(https?://\S+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_feroxbuster(stdout: str) -> list[dict[str, Any]]:
+    """Parse feroxbuster output lines: STATUS SIZE WORDS LINES METHOD URL."""
+    results: list[dict[str, Any]] = []
+    for line in stdout.splitlines():
+        m = _DIRFUZZ_LINE_RE.match(line)
+        if m:
+            status = int(m.group(1))
+            url = m.group(2)
+            # include 2xx and 3xx only (exclude 4xx noise)
+            if 200 <= status < 400:
+                results.append({"status": status, "url": url})
+    return results
+
+
+@registry.tool(
+    name="recon_web_dirfuzz",
+    description=(
+        "Web directory/file fuzzing via feroxbuster (fallback: gobuster) on Kali. "
+        "IMP-05: Discovers hidden paths on web targets. "
+        "IMP-16: skips if root URL already tried and not interesting. "
+        "IMP-18: auto-narrates result. "
+        "IMP-19: saves discovered paths to tried_endpoints."
+    ),
+    category="recon",
+)
+async def recon_web_dirfuzz(
+    target: str,
+    port: int = 80,
+    wordlist: str = "/usr/share/seclists/Discovery/Web-Content/common.txt",
+    extensions: str = "php,txt,bak,html",
+    depth: int = 2,
+    machine: str | None = None,
+) -> dict[str, Any]:
+    # IMP-16: skip if already tried and not interesting
+    if _check_endpoint_tried(target, port, machine):
+        url = _endpoint_url(target, port)
+        return {"skipped": True, "reason": "endpoint_already_tried", "url": url, "machine": machine}
+
+    scheme = "https" if port in (443, 8443) else "http"
+    base_url = f"{scheme}://{target}:{port}/"
+
+    # Build feroxbuster command; fall back to gobuster check
+    ferox_cmd = (
+        f"command -v feroxbuster >/dev/null 2>&1 && "
+        f"feroxbuster --url {shlex.quote(base_url)} "
+        f"--wordlist {shlex.quote(wordlist)} "
+        f"--extensions {shlex.quote(extensions)} "
+        f"--depth {depth} "
+        f"--no-state --no-recursion-limit --silent "
+        f"--timeout 10 -k 2>/dev/null "
+        f"|| command -v gobuster >/dev/null 2>&1 && "
+        f"gobuster dir --url {shlex.quote(base_url)} "
+        f"--wordlist {shlex.quote(wordlist)} "
+        f"--extensions {shlex.quote(extensions)} "
+        f"--no-progress -q -k 2>/dev/null "
+        f"|| echo 'KESTREL_ERROR: feroxbuster and gobuster not found on Kali'"
+    )
+
+    raw = await _run_kali(ferox_cmd, timeout=600.0)
+
+    if "KESTREL_ERROR" in raw["stdout"]:
+        return {
+            "error": "tool_not_found",
+            "hint": "Install feroxbuster or gobuster on Kali: apt install feroxbuster gobuster",
+            "target": target,
+        }
+
+    discovered = _parse_feroxbuster(raw["stdout"])
+    artifact = _save_artifact(
+        machine, "dirfuzz",
+        f"{target}_{port}.txt",
+        raw["stdout"],
+    )
+
+    # IMP-19: save interesting paths to tried_endpoints
+    for item in discovered:
+        _save_endpoint_tried(machine, item["url"], status=item["status"], interesting=True)
+    # save root URL as tried (not interesting if we got no results, interesting otherwise)
+    _save_endpoint_tried(machine, base_url, status=None, interesting=bool(discovered))
+
+    # IMP-18: auto-narrate result
+    await _auto_narrate("📡", f"dirfuzz {base_url}: {len(discovered)} paths discovered", machine)
+
+    return {
+        "target": target,
+        "port": port,
+        "base_url": base_url,
+        "rc": raw["rc"],
+        "duration_s": raw["duration_s"],
+        "discovered": discovered,
+        "discovered_count": len(discovered),
         "artifact": artifact,
     }

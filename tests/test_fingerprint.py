@@ -104,6 +104,76 @@ def test_web_in_container_monitorsfour_fixture():
     assert len(alts) >= 1, "Expected alternative_chains for web_in_container"
 
 
+# ─── IMP-20 — Jenkins / Elasticsearch / Jupyter fingerprint rules ─────────────
+
+
+def test_jenkins_port_8080_detected():
+    """IMP-20: port 8080 should produce jenkins-exploit category."""
+    out = run_fingerprint({
+        "ports": ["8080"],
+        "services": ["http"],
+        "banners": [],
+    })
+    cats = [c["category"] for c in out.get("attack_categories", [])]
+    assert "jenkins-exploit" in cats, f"Expected jenkins-exploit, got: {cats}"
+
+
+def test_jenkins_banner_hudson_detected():
+    """IMP-20: banner containing 'hudson' should produce jenkins-exploit."""
+    out = run_fingerprint({
+        "ports": ["8080"],
+        "services": ["http"],
+        "banners": ["X-Jenkins: 2.387", "Server: Jetty/Hudson"],
+    })
+    cats = [c["category"] for c in out.get("attack_categories", [])]
+    assert "jenkins-exploit" in cats, f"Expected jenkins-exploit via banner, got: {cats}"
+
+
+def test_elasticsearch_port_9200_detected():
+    """IMP-20: port 9200 should produce elasticsearch-expose category."""
+    out = run_fingerprint({
+        "ports": ["9200"],
+        "services": ["http"],
+        "banners": [],
+    })
+    cats = [c["category"] for c in out.get("attack_categories", [])]
+    assert "elasticsearch-expose" in cats, f"Expected elasticsearch-expose, got: {cats}"
+
+
+def test_jupyter_port_8888_detected():
+    """IMP-20: port 8888 should produce jupyter-rce category."""
+    out = run_fingerprint({
+        "ports": ["8888"],
+        "services": ["http"],
+        "banners": [],
+    })
+    cats = [c["category"] for c in out.get("attack_categories", [])]
+    assert "jupyter-rce" in cats, f"Expected jupyter-rce, got: {cats}"
+
+
+def test_jupyter_banner_detected():
+    """IMP-20: banner containing 'jupyter' should produce jupyter-rce category."""
+    out = run_fingerprint({
+        "ports": ["8888"],
+        "services": ["http"],
+        "banners": ["Jupyter Notebook", "Server: tornado"],
+    })
+    cats = [c["category"] for c in out.get("attack_categories", [])]
+    assert "jupyter-rce" in cats, f"Expected jupyter-rce via banner, got: {cats}"
+
+
+def test_elasticsearch_static_alternatives_nonempty():
+    """IMP-20: elasticsearch-expose category must have static alternatives defined."""
+    out = run_fingerprint({
+        "ports": ["9200"],
+        "services": ["http"],
+        "banners": ["elasticsearch"],
+    })
+    plan = out.get("attack_plan", {})
+    alts = plan.get("alternative_chains", [])
+    assert len(alts) >= 1, f"Expected ≥1 alternative_chains for elasticsearch, got: {alts}"
+
+
 def test_web_in_container_not_triggered_for_linux():
     """P4.1: Linux host should never trigger web_in_container."""
     out = run_fingerprint({

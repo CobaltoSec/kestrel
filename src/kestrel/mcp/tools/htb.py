@@ -146,12 +146,45 @@ async def htb_spawn(slug: str) -> dict[str, Any]:
         return _wrap_htb_error(exc)
 
 
+def _check_debrief(slug: str) -> dict[str, Any]:
+    """IMP-11: verify feedback.md exists with all 5 required sections."""
+    try:
+        ctx = mcp_context.get_context()
+        from kestrel.mcp.tools.state import _resolve_session_dir
+        session_dir = _resolve_session_dir(slug)
+        feedback_path = session_dir / "feedback.md"
+        if not feedback_path.exists():
+            return {"ok": False, "missing": ["feedback.md does not exist"], "path": None}
+        content = feedback_path.read_text(encoding="utf-8", errors="ignore")
+        required = ["## 1.", "## 2.", "## 3.", "## 4.", "## 5."]
+        missing = [s for s in required if s not in content]
+        return {"ok": len(missing) == 0, "missing": missing, "path": str(feedback_path)}
+    except Exception:
+        return {"ok": False, "missing": ["could not resolve session_dir for slug"], "path": None}
+
+
 @registry.tool(
     name="htb_release",
-    description="Release (terminate) an HTB machine. Resolves slug→id automatically.",
+    description="Release (terminate) an HTB machine. Resolves slug→id automatically. Requires feedback.md with 5 sections (IMP-11 debrief gate).",
     category="htb",
 )
-async def htb_release(slug: str) -> dict[str, Any]:
+async def htb_release(slug: str, force: bool = False) -> dict[str, Any]:
+    # IMP-11: debrief hard stop
+    if not force:
+        debrief = _check_debrief(slug)
+        if not debrief["ok"]:
+            return {
+                "error": "debrief_required",
+                "_hitl": True,
+                "question": (
+                    f"feedback.md incompleto para '{slug}'. "
+                    f"Secciones faltantes: {debrief['missing']}. "
+                    "Completá el debrief antes de liberar la máquina."
+                ),
+                "options": ["completar feedback.md primero", "forzar release con force=true"],
+                "missing_sections": debrief["missing"],
+                "feedback_path": debrief["path"],
+            }
     try:
         client = _get_client()
         info = await asyncio.to_thread(client.get_machine, slug)

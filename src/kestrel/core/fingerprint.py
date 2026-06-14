@@ -115,6 +115,38 @@ RULES = [
             {"os_eq": "windows",                            "weight": 0.20},
         ],
     },
+    # IMP-20 — Infrastructure service rules
+    {
+        "category": "jenkins-exploit",
+        "description": "Jenkins CI: Script Console RCE (unauthenticated or default creds)",
+        "tactics": [3, 4],
+        "kb_tags": ["jenkins", "script console rce", "groovy execute"],
+        "signals": [
+            {"ports_any": ["8080"],                             "weight": 0.45},
+            {"banner_contains": ["jenkins", "hudson"],          "weight": 0.50},
+            {"services_any": ["jenkins"],                       "weight": 0.90},
+        ],
+    },
+    {
+        "category": "elasticsearch-expose",
+        "description": "Elasticsearch unauthenticated: index dump, Painless script RCE",
+        "tactics": [3, 8],
+        "kb_tags": ["elasticsearch", "kibana", "painless script injection", "index dump"],
+        "signals": [
+            {"ports_any": ["9200", "9300", "5601"],             "weight": 0.80},
+            {"banner_contains": ["elasticsearch", "kibana"],    "weight": 0.85},
+        ],
+    },
+    {
+        "category": "jupyter-rce",
+        "description": "Jupyter Notebook unauthenticated: arbitrary Python code execution",
+        "tactics": [3, 4],
+        "kb_tags": ["jupyter notebook", "code execution", "terminal jupyter"],
+        "signals": [
+            {"ports_any": ["8888", "8889"],                     "weight": 0.60},
+            {"banner_contains": ["jupyter", "ipython"],         "weight": 0.90},
+        ],
+    },
     {
         "category": "rdp-attack",
         "description": "RDP: brute force, credential spray, BlueKeep, pass-the-hash",
@@ -128,15 +160,19 @@ RULES = [
 ]
 
 FRAMEWORK_CATEGORIES = {
-    "laravel":    ("laravel-exploit",    [3, 4],     ["laravel", "laravel rce", "laravel sqli"]),
-    "wordpress":  ("wordpress-exploit",  [3, 6],     ["wordpress", "wp-admin", "xmlrpc"]),
-    "drupal":     ("drupal-exploit",     [3, 4],     ["drupal", "drupalgeddon"]),
-    "django":     ("django-exploit",     [3, 4],     ["django", "debug mode", "ssti django"]),
-    "flask":      ("flask-exploit",      [3, 4],     ["flask", "ssti", "jinja2 ssti"]),
-    "express":    ("nodejs-exploit",     [3, 4],     ["express", "nodejs", "prototype pollution"]),
-    "spring":     ("spring-exploit",     [3, 4],     ["spring4shell", "spring boot", "actuator"]),
-    "tomcat":     ("tomcat-exploit",     [3, 4],     ["tomcat", "ghostcat", "ajp connector"]),
-    "phpmyadmin": ("phpmyadmin-exploit", [3, 4],     ["phpmyadmin", "sql file upload"]),
+    "laravel":         ("laravel-exploit",         [3, 4],     ["laravel", "laravel rce", "laravel sqli"]),
+    "wordpress":       ("wordpress-exploit",        [3, 6],     ["wordpress", "wp-admin", "xmlrpc"]),
+    "drupal":          ("drupal-exploit",           [3, 4],     ["drupal", "drupalgeddon"]),
+    "django":          ("django-exploit",           [3, 4],     ["django", "debug mode", "ssti django"]),
+    "flask":           ("flask-exploit",            [3, 4],     ["flask", "ssti", "jinja2 ssti"]),
+    "express":         ("nodejs-exploit",           [3, 4],     ["express", "nodejs", "prototype pollution"]),
+    "spring":          ("spring-exploit",           [3, 4],     ["spring4shell", "spring boot", "actuator"]),
+    "tomcat":          ("tomcat-exploit",           [3, 4],     ["tomcat", "ghostcat", "ajp connector"]),
+    "phpmyadmin":      ("phpmyadmin-exploit",       [3, 4],     ["phpmyadmin", "sql file upload"]),
+    # IMP-20 — Infrastructure services with known RCE / data-exposure vectors
+    "jenkins":         ("jenkins-exploit",          [3, 4],     ["jenkins script console", "jenkins rce", "groovy execute"]),
+    "elasticsearch":   ("elasticsearch-expose",     [3, 8],     ["elasticsearch", "kibana CVE", "painless script injection"]),
+    "jupyter":         ("jupyter-rce",              [3, 4],     ["jupyter notebook", "code execution", "terminal jupyter"]),
 }
 
 KB_CONFIDENCE_THRESHOLD = 0.60
@@ -158,9 +194,13 @@ STATIC_ALTERNATIVES: dict[str, list[str]] = {
     "linux_priv":         ["suid-search", "cron-writable", "capabilities-enum", "docker-escape"],
     "web_in_container":   ["docker-escape-cve", "container-volume-mount", "kernel-exploit-host"],
     # Framework-specific fallbacks
-    "laravel-exploit":    ["laravel-debug-rce", "laravel-deserialization", "env-leak"],
-    "wordpress-exploit":  ["xmlrpc-brute", "plugin-vuln-scan", "wp-admin-upload"],
-    "tomcat-exploit":     ["ghostcat-ajp", "manager-upload", "tomcat-default-creds"],
+    "laravel-exploit":        ["laravel-debug-rce", "laravel-deserialization", "env-leak"],
+    "wordpress-exploit":      ["xmlrpc-brute", "plugin-vuln-scan", "wp-admin-upload"],
+    "tomcat-exploit":         ["ghostcat-ajp", "manager-upload", "tomcat-default-creds"],
+    # IMP-20
+    "jenkins-exploit":        ["jenkins-default-creds", "jenkins-script-console-rce", "jenkins-cve-search"],
+    "elasticsearch-expose":   ["elasticsearch-unauth-dump", "kibana-rce", "elasticsearch-enum"],
+    "jupyter-rce":            ["jupyter-terminal-exec", "jupyter-no-auth-access", "jupyter-notebook-upload"],
 }
 
 ALT_CHAIN_KB_MIN_RESULTS = 2   # below this count → fill from STATIC_ALTERNATIVES

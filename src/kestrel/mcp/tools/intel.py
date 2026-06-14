@@ -26,6 +26,7 @@ from kestrel.core.fingerprint import build_attack_plan, query_kb, score_rules
 from kestrel.core.stuck import (
     detect_cred_exhausted,
     detect_hash_stuck,
+    detect_rabbit_hole,
     detect_shell_lost,
     read_file_safe,
     read_jsonl,
@@ -580,6 +581,13 @@ _STUCK_SIGNAL_STEPS: dict[str, dict[str, Any]] = {
         "rationale": "Stuck: cred_exhausted — all spray paths failed. Switch to alternative attack vector.",
         "source": "stuck",
     },
+    # IMP-06
+    "rabbit_hole": {
+        "action": "pivot_away",
+        "command": "# Rabbit hole — revisar tried[] y cambiar vector. Consultar attack_plan.alternative_chains.",
+        "rationale": "Stuck: rabbit_hole — misma acción repetida sin nuevos findings. Pivot obligatorio.",
+        "source": "stuck",
+    },
 }
 
 # Extended prefix set for _extract_command_hint — covers GTFOBins/LOLBAS output.
@@ -712,6 +720,9 @@ def _detect_stuck_signals(session_dir_str: str, machine: str) -> list[str]:
         signals.append("hash_stuck")
     if detect_cred_exhausted(estado, jsonl):
         signals.append("cred_exhausted")
+    # IMP-06
+    if detect_rabbit_hole(estado, jsonl):
+        signals.append("rabbit_hole")
     return signals
 
 

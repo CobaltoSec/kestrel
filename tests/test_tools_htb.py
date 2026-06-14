@@ -113,8 +113,58 @@ def test_htb_spawn_machine_not_found(fresh_ctx, mock_client):
 def test_htb_release_resolves_and_calls(fresh_ctx, mock_client):
     mock_client.get_machine.return_value = {"id": 1, "name": "Lame"}
     mock_client.release_machine.return_value = {"message": "Terminated."}
-    result = asyncio.run(htb_tools.htb_release(slug="lame"))
+    # force=True bypasses IMP-11 debrief gate (testing API call, not debrief logic)
+    result = asyncio.run(htb_tools.htb_release(slug="lame", force=True))
     assert result["machine_id"] == 1
+    mock_client.release_machine.assert_called_once_with(1)
+
+
+# ── IMP-11: debrief hard stop ────────────────────────────────────────────────
+
+
+def test_release_blocked_missing_feedback_md(fresh_ctx, mock_client):
+    """IMP-11: htb_release blocked when feedback.md does not exist."""
+    result = asyncio.run(htb_tools.htb_release(slug="lame"))
+    assert result.get("error") == "debrief_required"
+    assert result.get("_hitl") is True
+    assert "feedback.md does not exist" in str(result.get("missing_sections", ""))
+    mock_client.release_machine.assert_not_called()
+
+
+def test_release_blocked_incomplete_feedback_md(fresh_ctx, mock_client, tmp_path):
+    """IMP-11: htb_release blocked when feedback.md is missing sections."""
+    from kestrel.mcp.tools import state as state_tools
+    # register machine with a known session slug
+    asyncio.run(state_tools.state_write_machine(
+        machine="lame", patch={"machine_id": 1, "session_slug": "htb-test-lame"}
+    ))
+    sess_dir = fresh_ctx.session_root / "htb-test-lame"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    # write feedback.md with only 3 sections
+    (sess_dir / "feedback.md").write_text("## 1. foo\n## 2. bar\n## 3. baz\n")
+    result = asyncio.run(htb_tools.htb_release(slug="lame"))
+    assert result.get("error") == "debrief_required"
+    missing = result.get("missing_sections", [])
+    assert "## 4." in str(missing) and "## 5." in str(missing)
+    mock_client.release_machine.assert_not_called()
+
+
+def test_release_ok_with_complete_feedback_md(fresh_ctx, mock_client):
+    """IMP-11: htb_release passes when feedback.md has all 5 sections."""
+    from kestrel.mcp.tools import state as state_tools
+    asyncio.run(state_tools.state_write_machine(
+        machine="lame", patch={"machine_id": 1, "session_slug": "htb-test-lame"}
+    ))
+    sess_dir = fresh_ctx.session_root / "htb-test-lame"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    feedback = "\n".join(
+        f"## {i}. section {i}\nContent {i}." for i in range(1, 6)
+    )
+    (sess_dir / "feedback.md").write_text(feedback)
+    mock_client.get_machine.return_value = {"id": 1, "name": "Lame"}
+    mock_client.release_machine.return_value = {"message": "Terminated."}
+    result = asyncio.run(htb_tools.htb_release(slug="lame"))
+    assert result.get("machine_id") == 1
     mock_client.release_machine.assert_called_once_with(1)
 
 

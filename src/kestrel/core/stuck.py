@@ -33,6 +33,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,6 +41,10 @@ STALL_MINUTES = 30
 CRED_FAIL_THRESHOLD = 3
 LAB_UNSTABLE_WINDOW_MINUTES = 10
 LAB_UNSTABLE_THRESHOLD = 3   # >= N matches in window = lab_unstable signal
+# IMP-06 rabbit hole detection
+RABBIT_HOLE_WINDOW_MINUTES = 20
+RABBIT_HOLE_SAME_TEXT_THRESHOLD = 3    # same analyze narrate text repeated >= N times
+RABBIT_HOLE_CONSECUTIVE_THRESHOLD = 4  # same event detail repeated consecutively >= N times
 
 SHELL_LOST_PATTERNS = [
     r"shell\s+(?:dead|muerta|lost|died|caída|caida)",
@@ -165,6 +170,46 @@ def detect_progress_stalled(estado_path: Path, findings_path: Path,
     return age_min >= STALL_MINUTES
 
 
+def detect_rabbit_hole(estado: str, jsonl: list[dict]) -> bool:
+    """IMP-06: detect repetitive probing without progress in the last window.
+
+    Fires when EITHER:
+    1. The same analyze (🔍) narrate text appears >= RABBIT_HOLE_SAME_TEXT_THRESHOLD
+       times in the last RABBIT_HOLE_WINDOW_MINUTES, OR
+    2. The same event detail appears consecutively >= RABBIT_HOLE_CONSECUTIVE_THRESHOLD.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - RABBIT_HOLE_WINDOW_MINUTES * 60
+    recent = [
+        e for e in jsonl
+        if (parse_iso(e.get("ts", "")) or datetime.min.replace(tzinfo=timezone.utc)).timestamp() >= cutoff
+    ]
+
+    # Signal 1: same 🔍 analyze narrate text repeated
+    analyze_texts = [
+        e.get("detail", "")[:40].lower().strip()
+        for e in recent
+        if e.get("event") == "narrate" and e.get("stream") == "🔍"
+    ]
+    if analyze_texts:
+        top_count = Counter(analyze_texts).most_common(1)[0][1]
+        if top_count >= RABBIT_HOLE_SAME_TEXT_THRESHOLD:
+            return True
+
+    # Signal 2: same event detail repeated consecutively
+    event_keys = [e.get("detail", "")[:30].lower().strip() for e in recent if e.get("event")]
+    consecutive = 1
+    for i in range(1, len(event_keys)):
+        if event_keys[i] and event_keys[i] == event_keys[i - 1]:
+            consecutive += 1
+            if consecutive >= RABBIT_HOLE_CONSECUTIVE_THRESHOLD:
+                return True
+        else:
+            consecutive = 1
+
+    return False
+
+
 def detect_lab_unstable(jsonl: list[dict], now: datetime) -> bool:
     """v0.3 P3.1 — ≥ LAB_UNSTABLE_THRESHOLD network error patterns in the last window."""
     cutoff = now.timestamp() - LAB_UNSTABLE_WINDOW_MINUTES * 60
@@ -235,6 +280,9 @@ def recommend(signals: list[str], findings_md: str,
               session_dir: Path) -> tuple[str, list[str], str]:
     alts = merged_alternatives(findings_md, session_dir)
 
+    if "rabbit_hole" in signals:
+        return ("switch_vector", alts,
+                "Rabbit hole detectado — misma acción repetida sin progreso. Cambiar vector o consultar alternatives.")
     if "lab_unstable" in signals:
         return ("switch_vpn_server", alts,
                 "Lab/VPN unstable — verificar VPN + respawn machine si es necesario.")
@@ -293,6 +341,10 @@ def main():
     # v0.3 P3.1 — lab/VPN stability signal
     if detect_lab_unstable(jsonl, now):
         signals.append("lab_unstable")
+
+    # IMP-06 — rabbit hole detection
+    if detect_rabbit_hole(estado, jsonl):
+        signals.append("rabbit_hole")
 
     recommendation, alternatives, rationale = recommend(signals, findings, args.session_dir)
 

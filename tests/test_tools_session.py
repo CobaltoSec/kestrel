@@ -202,3 +202,52 @@ def test_session_upload_unsupported_transport(fresh_ctx, monkeypatch):
         handle_id="ssh-noup", content="x", remote_path="/tmp/x"
     ))
     assert res["error"] == "upload_not_supported"
+
+
+# ── IMP-15: HITL cleanup gate ─────────────────────────────────────────────────
+
+
+def test_session_close_blocked_wrong_phase(fresh_ctx, monkeypatch):
+    """IMP-15: session_close returns _hitl gate when phase is mid-engagement."""
+    from kestrel.mcp.tools import state as state_tools
+
+    class FakeSSH(StubSession):
+        def __init__(self, **kwargs):
+            super().__init__(handle_id="ssh-gate")
+
+    monkeypatch.setattr(session_tools, "SSHSession", FakeSSH)
+    asyncio.run(session_tools.session_open(transport="ssh", params={"host": "h", "user": "u"}))
+    # Set current phase to mid-engagement
+    asyncio.run(state_tools.state_write_machine(
+        machine="lame", patch={"machine_id": 1, "session_slug": "htb-test-lame"}
+    ))
+    state = fresh_ctx.state_store.read()
+    state.data.current_phase = "p3_vuln"
+    fresh_ctx.state_store.write(state)
+
+    result = asyncio.run(session_tools.session_close(handle_id="ssh-gate"))
+    assert result.get("_hitl") is True
+    assert "p3_vuln" in result.get("question", "")
+    # session should still be open
+    listed = asyncio.run(session_tools.session_list())
+    assert listed["count"] == 1
+
+
+def test_session_close_ok_p5_phase(fresh_ctx, monkeypatch):
+    """IMP-15: session_close succeeds when phase is p5_close."""
+    from kestrel.mcp.tools import state as state_tools
+
+    class FakeSSH(StubSession):
+        def __init__(self, **kwargs):
+            super().__init__(handle_id="ssh-p5")
+
+    monkeypatch.setattr(session_tools, "SSHSession", FakeSSH)
+    asyncio.run(session_tools.session_open(transport="ssh", params={"host": "h", "user": "u"}))
+    state = fresh_ctx.state_store.read()
+    state.data.current_phase = "p5_close"
+    fresh_ctx.state_store.write(state)
+
+    result = asyncio.run(session_tools.session_close(handle_id="ssh-p5"))
+    assert result.get("closed") is True
+    listed = asyncio.run(session_tools.session_list())
+    assert listed["count"] == 0

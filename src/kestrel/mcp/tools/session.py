@@ -90,10 +90,33 @@ async def session_exec(handle_id: str, cmd: str, timeout: float = 120.0) -> dict
 
 @registry.tool(
     name="session_close",
-    description="Close session `handle_id` and remove from the registry.",
+    description=(
+        "Close session `handle_id` and remove from the registry. "
+        "IMP-15: requires phase p5_close/p6_cleanup or force=true to prevent accidental mid-engagement closes."
+    ),
     category="session",
 )
-async def session_close(handle_id: str) -> dict[str, Any]:
+async def session_close(handle_id: str, force: bool = False) -> dict[str, Any]:
+    # IMP-15: HITL cleanup gate — prevent accidental session close mid-engagement
+    if not force:
+        try:
+            ctx = mcp_context.get_context()
+            state = ctx.state_store.read()
+            current_phase = state.data.current_phase or ""
+            if current_phase and current_phase not in ("p5_close", "p6_cleanup"):
+                return {
+                    "_hitl": True,
+                    "question": (
+                        f"Fase actual es '{current_phase}' — no es p5_close. "
+                        "¿Cerrar sesión de todas formas?"
+                    ),
+                    "options": ["confirmar cierre (usar force=true)", "cancelar — continuar engagement"],
+                    "context": "session_close requiere p5_close para evitar cierres accidentales.",
+                    "handle_id": handle_id,
+                }
+        except Exception:
+            pass  # no state context in tests — allow through
+
     ctx = mcp_context.get_context()
     sess = ctx.sessions.remove(handle_id)
     if sess is None:
