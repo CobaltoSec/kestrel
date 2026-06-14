@@ -19,6 +19,7 @@ class ExecResult:
     stderr: str
     rc: int
     duration_s: float
+    infrastructure_error: bool = False
 
 
 class Session(ABC):

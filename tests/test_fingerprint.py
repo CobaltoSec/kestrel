@@ -7,6 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).parent.parent / "scripts" / "blind_fingerprint.py"
 
 
@@ -111,3 +113,63 @@ def test_web_in_container_not_triggered_for_linux():
     })
     cats = [c["category"] for c in out.get("attack_categories", [])]
     assert "web_in_container" not in cats
+
+
+# ─── IMP-07a + IMP-13 ────────────────────────────────────────────────────────
+
+def test_kb_confidence_threshold_value():
+    """IMP-07a: KB_CONFIDENCE_THRESHOLD must be 0.60."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from kestrel.core.fingerprint import KB_CONFIDENCE_THRESHOLD
+    assert KB_CONFIDENCE_THRESHOLD == 0.60, (
+        f"Expected KB_CONFIDENCE_THRESHOLD=0.60, got {KB_CONFIDENCE_THRESHOLD}"
+    )
+
+
+def test_score_rules_normalized_partial_signals():
+    """IMP-13: partial activation normalizes correctly.
+
+    Rule with signals [0.40, 0.60] (max_possible=1.0).
+    Only port signal (0.40) active → raw=0.40, normalized=0.40/1.0=0.40.
+
+    Rule with signals [0.30, 0.30] (max_possible=0.60).
+    Only one signal active → raw=0.30, normalized=0.30/0.60=0.50.
+    Without normalization it would be 0.30; with normalization it is 0.50.
+    We verify via docker-escape rule: signals are [0.90 (port), 0.90 (service)]
+    → max_possible=1.80. With only port 2375 active (no 'docker' service):
+    raw=0.90, normalized=0.90/1.80=0.50 (not 0.90).
+    """
+    out = run_fingerprint({
+        "ports": ["2375"],
+        "services": ["http"],   # NOT 'docker' — only port signal fires
+        "banners": [],
+    })
+    cats = {c["category"]: c["confidence"] for c in out.get("attack_categories", [])}
+    assert "docker-escape" in cats, "docker-escape should trigger on port 2375"
+    conf = cats["docker-escape"]
+    # With normalization: 0.90/1.80 = 0.50
+    # Without normalization (old cap): min(0.90, 0.95) = 0.90
+    assert conf == pytest.approx(0.50, abs=0.01), (
+        f"Expected docker-escape confidence ~0.50 (normalized), got {conf}"
+    )
+
+
+def test_score_rules_full_signals_caps_at_095():
+    """IMP-13: all signals active on a rule → confidence capped at 0.95.
+
+    docker-escape: port 2375 (0.90) + service 'docker' (0.90) → raw=1.80,
+    normalized=1.80/1.80=1.00 → capped at 0.95.
+    """
+    out = run_fingerprint({
+        "ports": ["2375"],
+        "services": ["docker"],   # both signals fire
+        "banners": [],
+    })
+    cats = {c["category"]: c["confidence"] for c in out.get("attack_categories", [])}
+    assert "docker-escape" in cats, "docker-escape should trigger"
+    conf = cats["docker-escape"]
+    assert conf == pytest.approx(0.95, abs=0.01), (
+        f"Expected docker-escape confidence 0.95 (cap), got {conf}"
+    )

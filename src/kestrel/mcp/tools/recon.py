@@ -20,21 +20,32 @@ from kestrel.transport import kali_proxy
 
 NMAP_PROFILES: dict[str, str] = {
     "quick": "-sS -T4 --top-ports=1000 -oX -",
-    "full": "-sS -T4 -p- -sV -sC --max-retries=1 -oX -",
-    "udp": "-sU -T4 --top-ports=200 -oX -",
+    "full": "-sS -T4 -p- -sV -sC --max-retries=1 --host-timeout 600s --max-rtt-timeout 300ms --initial-rtt-timeout 50ms -oX -",
+    "udp": "-sU -T4 --top-ports=100 --max-rtt-timeout 200ms --initial-rtt-timeout 50ms --max-retries=1 -oX -",
     "nse_smb": "-p139,445 -sS --script=smb-enum-shares,smb-enum-users,smb-vuln-* -oX -",
+    "os_detect": "-sS -O --osscan-guess -p22,80,443,445,3389 -oX -",
 }
+
+_HEAVY_CMDS = ("nmap", "nuclei", "enum4linux", "feroxbuster", "ffuf", "gobuster", "sqlmap")
 
 
 async def _run_kali(cmd: str, timeout: float = 600.0) -> dict[str, Any]:
+    first_token = cmd.strip().split()[0]
+    if any(first_token.endswith(t) for t in _HEAVY_CMDS):
+        safe_secs = max(30, int(timeout) - 30)
+        cmd = f"timeout {safe_secs}s {cmd}"
     res = await asyncio.to_thread(kali_proxy.via_kali, cmd, timeout)
-    return {
+    result = {
         "cmd": cmd,
         "rc": res.rc,
         "stdout": res.stdout,
         "stderr": res.stderr.strip(),
         "duration_s": res.duration_s,
     }
+    if res.infrastructure_error:
+        result["infrastructure_error"] = True
+        result["hint"] = "Verificar que Kali VM esté up con kali_status()"
+    return result
 
 
 def _save_artifact(machine: str | None, subdir: str, filename: str, content: str) -> str | None:
@@ -125,7 +136,7 @@ async def recon_nmap_scan(
     base = NMAP_PROFILES[profile]
     if ports:
         # Override -p in profiles that have it
-        base = base.replace("--top-ports=1000", "").replace("--top-ports=200", "").replace("-p139,445", "")
+        base = base.replace("--top-ports=1000", "").replace("--top-ports=100", "").replace("-p139,445", "").replace("-p22,80,443,445,3389", "")
         cmd = f"nmap {base.strip()} -p {shlex.quote(ports)} {shlex.quote(target)}"
     else:
         cmd = f"nmap {base} {shlex.quote(target)}"

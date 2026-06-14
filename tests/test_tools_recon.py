@@ -235,3 +235,61 @@ def test_recon_service_probe_builds_cmd(fresh_ctx, mock_via_kali):
     assert "-sV -sC" in cmd
     assert "default,smb-vuln" in cmd
     assert "-p 445" in cmd
+
+
+# ── IMP-01 + IMP-08: NMAP_PROFILES improvements ─────────────────────────────
+
+
+def test_nmap_profiles_full_contains_host_timeout():
+    assert "--host-timeout" in recon_tools.NMAP_PROFILES["full"]
+
+
+def test_nmap_profiles_has_os_detect():
+    assert "os_detect" in recon_tools.NMAP_PROFILES
+
+
+def test_nmap_profiles_os_detect_has_osscan_guess():
+    assert "--osscan-guess" in recon_tools.NMAP_PROFILES["os_detect"]
+
+
+def test_nmap_profiles_udp_has_max_rtt_timeout():
+    assert "--max-rtt-timeout" in recon_tools.NMAP_PROFILES["udp"]
+
+
+# ── IMP-08: _run_kali() adds timeout prefix for heavy commands ───────────────
+
+
+def test_run_kali_prefixes_nmap_with_timeout(fresh_ctx, mock_via_kali):
+    mock_via_kali["return"]["result"] = ExecResult(
+        stdout=NMAP_XML_SAMPLE, stderr="", rc=0, duration_s=10.0
+    )
+    asyncio.run(recon_tools.recon_nmap_scan(target="10.10.10.3", profile="quick"))
+    cmd = mock_via_kali["calls"][0][0]
+    # _run_kali should have prefixed with "timeout Ns nmap ..."
+    assert cmd.startswith("timeout ") and "nmap" in cmd
+
+
+def test_run_kali_timeout_prefix_value_is_safe_secs(fresh_ctx, mock_via_kali):
+    """The timeout prefix should be timeout - 30 seconds (floor 30)."""
+    mock_via_kali["return"]["result"] = ExecResult(
+        stdout=NMAP_XML_SAMPLE, stderr="", rc=0, duration_s=5.0
+    )
+    # recon_nmap_scan calls _run_kali with timeout=900.0
+    asyncio.run(recon_tools.recon_nmap_scan(target="10.10.10.3", profile="quick"))
+    cmd = mock_via_kali["calls"][0][0]
+    # "timeout 870s nmap ..."
+    assert "timeout 870s" in cmd
+
+
+# ── IMP-12: infrastructure_error in _run_kali result ────────────────────────
+
+
+def test_run_kali_propagates_infrastructure_error(fresh_ctx, mock_via_kali):
+    mock_via_kali["return"]["result"] = ExecResult(
+        stdout="", stderr="kali_unreachable:connect_failed", rc=-1,
+        duration_s=0.0, infrastructure_error=True,
+    )
+    result = asyncio.run(recon_tools.recon_nmap_scan(target="10.10.10.3", profile="quick"))
+    # The raw result from _run_kali should carry infrastructure_error hint
+    # recon_nmap_scan returns the top-level result; we verify no exception was raised
+    assert result["rc"] == -1

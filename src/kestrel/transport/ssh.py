@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import shlex
+import socket
 import time
 import uuid
 from pathlib import Path
@@ -41,6 +42,7 @@ class SSHSession(Session):
         self.connect_timeout = timeout
         self.handle_id = handle_id or f"ssh-{uuid.uuid4().hex[:8]}"
         self._client: paramiko.SSHClient | None = None
+        self._reconnect_attempts: int = 0
 
     def open(self) -> None:
         if self._client is not None:
@@ -67,16 +69,33 @@ class SSHSession(Session):
             self.open()
         assert self._client is not None
         started = time.monotonic()
-        stdin, stdout, stderr = self._client.exec_command(cmd, timeout=timeout)
-        out_data = stdout.read().decode("utf-8", errors="replace")
-        err_data = stderr.read().decode("utf-8", errors="replace")
-        rc = stdout.channel.recv_exit_status()
-        return ExecResult(
-            stdout=out_data,
-            stderr=err_data,
-            rc=rc,
-            duration_s=round(time.monotonic() - started, 3),
-        )
+        try:
+            stdin, stdout, stderr = self._client.exec_command(cmd)
+            stdout.channel.settimeout(timeout)
+            out_data = stdout.read().decode("utf-8", errors="replace")
+            err_data = stderr.read().decode("utf-8", errors="replace")
+            rc = stdout.channel.recv_exit_status()
+        except socket.timeout:
+            self._client = None
+            if self._reconnect_attempts < 1:
+                self._reconnect_attempts += 1
+                return self.exec(cmd, timeout)
+            self._reconnect_attempts = 0
+            return ExecResult(stdout="", stderr="ssh_channel_timeout", rc=-1,
+                              duration_s=round(time.monotonic() - started, 3),
+                              infrastructure_error=True)
+        except (paramiko.SSHException, EOFError) as exc:
+            self._client = None
+            if self._reconnect_attempts < 1:
+                self._reconnect_attempts += 1
+                return self.exec(cmd, timeout)
+            self._reconnect_attempts = 0
+            return ExecResult(stdout="", stderr=f"ssh_exception:{exc}", rc=-1,
+                              duration_s=round(time.monotonic() - started, 3),
+                              infrastructure_error=True)
+        self._reconnect_attempts = 0
+        return ExecResult(stdout=out_data, stderr=err_data, rc=rc,
+                          duration_s=round(time.monotonic() - started, 3))
 
     def upload(self, local_path: str | Path, remote_path: str) -> None:
         """SCP-style upload via SFTP."""

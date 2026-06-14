@@ -8,6 +8,29 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v0.5.0 (RT-KESTREL-V05 — Blind Effectiveness Sprint)
+
+**10 mejoras de confiabilidad e inteligencia blind (2026-06-14):**
+
+#### P0 — Bugs críticos
+- **IMP-01** `transport/ssh.py`: `exec()` ahora usa `channel.settimeout()` en lugar de pasar timeout a `exec_command` — elimina el bloqueo indefinido de `stdout.read()`. Auto-reconexión: captura `socket.timeout`/`SSHException`/`EOFError`, retry 1 vez. `_run_kali()` prefixea comandos pesados con `timeout {N}s` en Kali-side.
+- **IMP-02** `mcp/tools/intel.py`: `intel_classify_blind` — `query_kb()` síncrono → `await asyncio.wait_for(asyncio.to_thread(...))`. Elimina bloqueo del event loop MCP.
+- **IMP-03** `mcp/tools/vuln.py`: `vuln_nuclei_targeted` — templates via `-id CVE1,CVE2` (comma-separated) en lugar de múltiples `-id` repetidos. Nuclei v3 ignoraba todos excepto el último.
+- **IMP-04** `mcp/tools/state.py`: `state_write_machine` valida nombre de máquina con `[a-z0-9][a-z0-9-]{0,48}` — rechaza XSS/SSTI/null-bytes antes de persistir.
+
+#### P1 — Efectividad blind
+- **IMP-07** `core/fingerprint.py` + `mcp/tools/intel.py`: `KB_CONFIDENCE_THRESHOLD` 0.80 → 0.60. Targets web-only ahora acceden a KB. Agregar `kb_active: bool` + `kb_note` al output de `intel_classify_blind` e `intel_next_step`.
+- **IMP-08** `mcp/tools/recon.py`: nmap `full` + `--host-timeout 600s --max-rtt-timeout 300ms --initial-rtt-timeout 50ms`. UDP top-ports=100 + timing. Nuevo perfil `os_detect`.
+- **IMP-09** `mcp/prompts/kickoff.py`: machine_lines enriquecido — `target_ip`, `machine_os`, línea `↳` con `next_hint`/`intel_conf`/`fingerprint`/`session` al retomar.
+- **IMP-10** `mcp/tools/intel.py`: `intel_next_step` — nuevas fases `p3a_pre_foothold` (exploit-focused) y `p3b_post_foothold` (post-shell). `p3_foothold` conservado por compatibilidad.
+- **IMP-12** `transport/kali_proxy.py` + `transport/base.py`: `ExecResult` + `infrastructure_error: bool`. `via_kali()` retorna ExecResult estructurado en lugar de propagar excepción paramiko cruda.
+- **IMP-13** `core/fingerprint.py`: `score_rules()` normaliza por `max_possible` de la categoría — `0.95` solo con todos los signals activos.
+- **IMP-17** `mcp/tools/intel.py`: `intel_next_step` auto-carga `tried_credentials` + `tried_endpoints` desde state_store para dedup cross-session. Expone `auto_tried_merged: int`.
+
+**Tests:** 382 passed, 16 skipped — +~40 tests nuevos en transport, recon, vuln, intel, fingerprint, state, prompts.
+
+---
+
 ### v0.5.0-dev (RT-KESTREL-V05-W4-O2 — Intel Tools)
 
 **+2 MCP tools en categoría `intel`:**

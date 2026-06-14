@@ -11,9 +11,12 @@ repeatedly reconnect. Callers can override with explicit ``session=`` arg.
 from __future__ import annotations
 
 import os
+import socket
 import threading
 from pathlib import Path
 from typing import Optional
+
+import paramiko
 
 from kestrel.transport.base import ExecResult
 from kestrel.transport.ssh import SSHSession
@@ -54,9 +57,19 @@ def via_kali(
     """Run ``cmd`` on the Kali VM and return its ExecResult.
 
     Reuses the process-global session by default; pass ``session=`` to override.
+    On connection/auth errors returns a structured ExecResult with infrastructure_error=True.
     """
     sess = session or get_default_kali_session()
-    return sess.exec(cmd, timeout=timeout)
+    try:
+        return sess.exec(cmd, timeout=timeout)
+    except (paramiko.AuthenticationException, paramiko.NoValidConnectionsError) as e:
+        reason = "auth_failed" if "Authentication" in str(e) else "connect_failed"
+    except socket.timeout:
+        reason = "socket_timeout"
+    except Exception as e:
+        reason = f"unknown:{type(e).__name__}"
+    return ExecResult(stdout="", stderr=f"kali_unreachable:{reason}", rc=-1,
+                      duration_s=0.0, infrastructure_error=True)
 
 
 def close_default_session() -> None:

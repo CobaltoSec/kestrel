@@ -268,3 +268,68 @@ def test_default_secret_path_in_home():
     assert str(DEFAULT_SECRET_PATH).endswith(".kestrel/msfrpc.secret") or str(
         DEFAULT_SECRET_PATH
     ).endswith(".kestrel\\msfrpc.secret")
+
+
+# ── IMP-12: infrastructure_error field ──────────────────────────────────────
+
+
+def test_exec_result_infrastructure_error_defaults_false():
+    r = ExecResult(stdout="out", stderr="", rc=0, duration_s=0.1)
+    assert r.infrastructure_error is False
+
+
+def test_exec_result_infrastructure_error_can_be_set():
+    r = ExecResult(stdout="", stderr="err", rc=-1, duration_s=0.0, infrastructure_error=True)
+    assert r.infrastructure_error is True
+
+
+# ── IMP-01 + IMP-12: socket.timeout in exec() → infrastructure_error ────────
+
+
+@patch("kestrel.transport.ssh.paramiko.SSHClient")
+def test_ssh_exec_socket_timeout_returns_infrastructure_error(mock_client_cls):
+    import socket as _socket
+
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    # Simulate channel settimeout raising socket.timeout on read
+    mock_stdout = MagicMock()
+    mock_stdout.channel.settimeout = MagicMock()
+    mock_stdout.read.side_effect = _socket.timeout("timed out")
+    mock_stderr = MagicMock()
+    mock_client.exec_command.return_value = (MagicMock(), mock_stdout, mock_stderr)
+
+    s = SSHSession(host="h", user="u")
+    s.open()
+    # First call triggers reconnect attempt (attempt 1), second hits the cap
+    # We open a fresh session to avoid state from previous tests
+    s2 = SSHSession(host="h", user="u")
+    s2._client = mock_client
+    s2._reconnect_attempts = 1  # Already at max → should return error immediately
+    result = s2.exec("sleep 999", timeout=0.01)
+
+    assert result.rc == -1
+    assert result.infrastructure_error is True
+    assert "timeout" in result.stderr
+
+
+@patch("kestrel.transport.ssh.paramiko.SSHClient")
+def test_ssh_exec_resets_reconnect_attempts_on_success(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_stdin = MagicMock()
+    mock_stdout = MagicMock()
+    mock_stderr = MagicMock()
+    mock_stdout.read.return_value = b"ok"
+    mock_stderr.read.return_value = b""
+    mock_stdout.channel.recv_exit_status.return_value = 0
+    mock_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+
+    s = SSHSession(host="h", user="u")
+    s._client = mock_client
+    s._reconnect_attempts = 1  # Pre-set as if a reconnect was in progress
+    result = s.exec("echo ok")
+
+    assert result.rc == 0
+    assert s._reconnect_attempts == 0
+    assert result.infrastructure_error is False

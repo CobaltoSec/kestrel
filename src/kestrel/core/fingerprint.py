@@ -139,7 +139,7 @@ FRAMEWORK_CATEGORIES = {
     "phpmyadmin": ("phpmyadmin-exploit", [3, 4],     ["phpmyadmin", "sql file upload"]),
 }
 
-KB_CONFIDENCE_THRESHOLD = 0.80
+KB_CONFIDENCE_THRESHOLD = 0.60
 
 # ─── v0.3 — Static fallback for alternative_chains ───────────────────────────
 # Used when KB returns < 2 results for a category. Guarantees alternative_chains
@@ -249,7 +249,8 @@ def score_rules(
             if "framework_not_null" in sig and framework:
                 score += sig["weight"]
 
-        score = min(score, 0.95)
+        max_possible = sum(sig["weight"] for sig in rule.get("signals", []))
+        score = min(score / max_possible, 0.95) if max_possible > 0 else 0.0
         if score > 0.05:
             results.append({
                 "category": rule["category"],

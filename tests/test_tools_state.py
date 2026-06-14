@@ -133,3 +133,53 @@ def test_state_append_event_uses_current_session_fallback(fresh_ctx):
     fresh_ctx.state_store.set_current_phase("p1", session_slug="htb-fallback-test")
     result = asyncio.run(state_tools.state_append_event(phase="p1", event="fallback_test"))
     assert "htb-fallback-test" in result["session_dir"]
+
+
+# ── state_write_machine validation (IMP-04) ─────────────────────────────────
+
+
+def test_state_write_machine_invalid_name_xss(fresh_ctx):
+    result = asyncio.run(
+        state_tools.state_write_machine(
+            machine="<script>alert(1)</script>", patch={"machine_id": 1}
+        )
+    )
+    assert result["error"] == "invalid_machine_name"
+
+
+def test_state_write_machine_invalid_name_ssti(fresh_ctx):
+    result = asyncio.run(
+        state_tools.state_write_machine(
+            machine="{{7*7}}", patch={"machine_id": 1}
+        )
+    )
+    assert result["error"] == "invalid_machine_name"
+
+
+def test_state_write_machine_invalid_name_empty(fresh_ctx):
+    result = asyncio.run(
+        state_tools.state_write_machine(
+            machine="", patch={"machine_id": 1}
+        )
+    )
+    assert result["error"] == "invalid_machine_name"
+
+
+def test_state_write_machine_valid_name(fresh_ctx):
+    result = asyncio.run(
+        state_tools.state_write_machine(
+            machine="reactor", patch={"machine_id": 900}
+        )
+    )
+    assert "error" not in result
+    assert result["machine"] == "reactor"
+
+
+def test_state_write_machine_valid_name_with_dash(fresh_ctx):
+    result = asyncio.run(
+        state_tools.state_write_machine(
+            machine="my-machine", patch={"machine_id": 42}
+        )
+    )
+    assert "error" not in result
+    assert result["machine"] == "my-machine"

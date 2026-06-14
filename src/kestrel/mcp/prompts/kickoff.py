@@ -20,11 +20,42 @@ async def kickoff() -> str:
     state = ctx.state_store.read()
     machines = state.data.machines
     if machines:
-        machine_lines = "\n".join(
-            f"  - **{slug}** — phase={state.data.current_phase or 'none'} retired={m.machine_retired} "
-            f"mode={m.htb_mode} owned={(m.user_owned, m.root_owned)}"
-            for slug, m in machines.items()
-        )
+        lines = []
+        for slug, m in machines.items():
+            phase = getattr(m, "current_phase", None) or state.data.current_phase or "none"
+            target_ip = getattr(m, "target_ip", None) or "?"
+            machine_os = getattr(m, "machine_os", None) or "?"
+            htb_mode = getattr(m, "htb_mode", None) or "guided"
+            owned = (getattr(m, "user_owned", False), getattr(m, "root_owned", False))
+
+            line = (
+                f"  - **{slug}** — phase={phase} ip={target_ip} os={machine_os} "
+                f"mode={htb_mode} owned={owned}"
+            )
+
+            # Resume context — only for machines not fully owned
+            if not (getattr(m, "user_owned", False) and getattr(m, "root_owned", False)):
+                extras = []
+                next_hint = getattr(m, "next_step_hint", None)
+                intel_conf = getattr(m, "intel_confidence", None)
+                fp_top = getattr(m, "blind_fingerprint_top", None)
+                fp_conf = getattr(m, "blind_fingerprint_conf", None)
+                session_slug = getattr(m, "session_slug", None)
+
+                if next_hint:
+                    extras.append(f"next_hint={next_hint}")
+                if intel_conf and intel_conf != "none":
+                    extras.append(f"intel_conf={intel_conf}")
+                if fp_top:
+                    extras.append(f"fingerprint={fp_top}({fp_conf})")
+                if session_slug:
+                    extras.append(f"session={session_slug}")
+
+                if extras:
+                    line += "\n    ↳ " + " | ".join(extras)
+
+            lines.append(line)
+        machine_lines = "\n".join(lines)
     else:
         machine_lines = "  _(ninguna máquina trackeada — empezar con `phase_enter('p0_setup')` + `htb_list_machines`)_"
 
@@ -89,4 +120,5 @@ Cuando hagas `intel_save_synthesis`, escribí **dirección** no **comandos copy-
 
 Si arrancás fresh → `phase_enter('p0_setup')` + `htb_list_machines(status='retired', difficulty='Easy')`.
 Si hay sesión activa → `state_read` + `phase_current` para retomar.
+{f"Al retomar: empezá con state_read(machine='{sess}') si necesitás más contexto." if state.data.current_session else ""}
 """

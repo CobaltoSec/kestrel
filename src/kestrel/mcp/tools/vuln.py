@@ -86,7 +86,7 @@ async def vuln_nuclei_targeted(
     severity: str | None = None,
     machine: str | None = None,
 ) -> dict[str, Any]:
-    tmpl_args = " ".join(f"-id {shlex.quote(t)}" for t in templates)
+    tmpl_args = f"-id {shlex.quote(','.join(templates))}"
     sev = f"-severity {shlex.quote(severity)}" if severity else ""
     cmd = f"nuclei -u {shlex.quote(target)} {tmpl_args} {sev} -jsonl -silent -timeout 8"
     raw = await _run_kali(cmd, timeout=600.0)

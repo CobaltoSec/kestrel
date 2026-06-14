@@ -7,12 +7,15 @@ JSON files directly.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from kestrel.mcp import context as mcp_context
 from kestrel.mcp import registry
+
+_MACHINE_SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9\-]{0,48}$')
 
 
 def _resolve_session_dir(machine: str | None = None) -> Path:
@@ -75,7 +78,11 @@ async def state_read(machine: str | None = None) -> dict[str, Any]:
     input_schema={
         "type": "object",
         "properties": {
-            "machine": {"type": "string", "description": "Machine slug (e.g. 'lame')."},
+            "machine": {
+                "type": "string",
+                "description": "Machine slug (e.g. 'lame').",
+                "pattern": "^[a-z0-9][a-z0-9\\-]{0,48}$",
+            },
             "patch": {
                 "type": "object",
                 "description": "Partial MachineState fields to merge (e.g. target_ip, htb_mode, user_owned).",
@@ -85,6 +92,12 @@ async def state_read(machine: str | None = None) -> dict[str, Any]:
     },
 )
 async def state_write_machine(machine: str, patch: dict[str, Any]) -> dict[str, Any]:
+    if not _MACHINE_SLUG_RE.match(machine):
+        return {
+            "error": "invalid_machine_name",
+            "reason": f"Machine name '{machine[:50]}' contiene caracteres inválidos. Usar solo [a-z0-9-] max 49 chars.",
+            "machine": machine[:50],
+        }
     ctx = mcp_context.get_context()
     merged = ctx.state_store.update_machine(machine, patch)
     return {

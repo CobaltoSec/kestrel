@@ -658,3 +658,196 @@ def test_cve_lookup_concurrent_stages(fresh_ctx, monkeypatch):
     assert len(kb_called) == 1
     assert len(nvd_called) == 1
     assert result["stages"]["nvd"][0]["cve_id"] == "CVE-2007-2447"
+
+
+# ── IMP-02: intel_classify_blind async KB ────────────────────────────────────
+
+
+def test_intel_classify_blind_kb_active_field(fresh_ctx, monkeypatch):
+    """IMP-07b: result includes kb_active (bool) and kb_note (str or None)."""
+    result = asyncio.run(
+        intel_tools.intel_classify_blind(
+            target="10.10.10.3",
+            ports=["445"],
+            services=["microsoft-ds"],
+            banners=[],
+        )
+    )
+    assert "kb_active" in result
+    assert isinstance(result["kb_active"], bool)
+    assert "kb_note" in result
+    # KB unavailable in fresh_ctx (no KESTREL_KB_PATH) → kb_active=False, kb_note non-null
+    assert result["kb_active"] is False
+    assert result["kb_note"] is not None
+    assert isinstance(result["kb_note"], str)
+
+
+def test_intel_classify_blind_kb_active_true_when_chunks(fresh_ctx, monkeypatch):
+    """IMP-07b: when KB returns chunks, kb_active=True and kb_note=None."""
+    fake_chunks = [{"category": "smb-exploit", "text": "Samba RCE", "score": 0.9}]
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fake_chunks
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    result = asyncio.run(
+        intel_tools.intel_classify_blind(
+            target="10.10.10.3",
+            ports=["445"],
+            services=["microsoft-ds"],
+            banners=[],
+        )
+    )
+    assert result["kb_active"] is True
+    assert result["kb_note"] is None
+
+
+def test_intel_classify_blind_asyncio_not_blocking(fresh_ctx, monkeypatch):
+    """IMP-02: query_kb is called via asyncio.to_thread (non-blocking path)."""
+    thread_calls: list[str] = []
+    original_to_thread = asyncio.to_thread
+
+    async def tracking_to_thread(fn, *args, **kwargs):
+        thread_calls.append(fn.__name__ if hasattr(fn, "__name__") else repr(fn))
+        return []
+
+    monkeypatch.setattr(asyncio, "to_thread", tracking_to_thread)
+
+    asyncio.run(
+        intel_tools.intel_classify_blind(
+            target="10.10.10.3",
+            ports=["445"],
+            services=["microsoft-ds"],
+            banners=[],
+        )
+    )
+    # query_kb must have been dispatched through to_thread
+    assert any("query_kb" in call for call in thread_calls)
+
+
+# ── IMP-10: p3a / p3b phase support ─────────────────────────────────────────
+
+
+def test_intel_next_step_p3a_phase_accepted(fresh_ctx, monkeypatch):
+    """IMP-10: p3a_pre_foothold is a valid phase — returns steps without error."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3a_pre_foothold",
+            tried=[],
+            findings=["apache 2.4.49"],
+            top_k=5,
+        )
+    )
+    assert "steps" in result
+    assert "phase" in result
+    assert result["phase"] == "p3a_pre_foothold"
+    assert len(result["steps"]) > 0
+    actions = {s["action"] for s in result["steps"]}
+    # p3a_pre_foothold has exploit/sqli/brute-focused steps
+    assert any(a in actions for a in ("test_rce_endpoint", "searchsploit_service", "run_poc", "sqli_auto", "brute_web_login"))
+
+
+def test_intel_next_step_p3b_phase_accepted(fresh_ctx, monkeypatch):
+    """IMP-10: p3b_post_foothold is a valid phase — returns steps without error."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3b_post_foothold",
+            tried=[],
+            findings=["got shell as www-data"],
+            top_k=5,
+        )
+    )
+    assert "steps" in result
+    assert result["phase"] == "p3b_post_foothold"
+    assert len(result["steps"]) > 0
+    actions = {s["action"] for s in result["steps"]}
+    assert any(a in actions for a in ("pty_upgrade", "fix_terminal", "basic_loot", "suid_search", "sudo_check"))
+
+
+def test_intel_next_step_p3_foothold_still_works(fresh_ctx, monkeypatch):
+    """IMP-10: original p3_foothold still resolves (backwards compat)."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3_foothold",
+            tried=[],
+            findings=[],
+            top_k=10,
+        )
+    )
+    assert len(result["steps"]) > 0
+    actions = {s["action"] for s in result["steps"]}
+    assert "rce_verify" in actions
+
+
+# ── IMP-17: auto_tried_merged from state ─────────────────────────────────────
+
+
+def test_intel_next_step_tried_autoload(fresh_ctx, monkeypatch):
+    """IMP-17: tried_credentials with auth_failed results are auto-merged into tried."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+
+    # Seed state with two failed credentials
+    from kestrel.mcp.tools import state as state_tools
+    asyncio.run(
+        state_tools.state_write_machine(
+            machine="lame",
+            patch={
+                "tried_credentials": [
+                    {"user": "admin", "password": "password123", "service": "ssh", "result": "auth_failed", "ts": "2026-01-01T00:00:00Z"},
+                    {"user": "root", "password": "toor", "service": "ssh", "result": "auth_failed", "ts": "2026-01-01T00:01:00Z"},
+                    {"user": "admin", "password": "letmein", "service": "ssh", "result": "success", "ts": "2026-01-01T00:02:00Z"},
+                ]
+            },
+        )
+    )
+
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p3_foothold",
+            tried=[],
+            findings=[],
+        )
+    )
+    # Two auth_failed creds should have been merged
+    assert result["auto_tried_merged"] >= 2
+    assert "auto_tried_merged" in result
+
+
+def test_intel_next_step_tried_autoload_no_state(fresh_ctx, monkeypatch):
+    """IMP-17: auto_tried_merged=0 when machine has no tried_credentials in state."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="unknown_machine_xyz",
+            current_phase="p2_enum",
+            tried=[],
+            findings=[],
+        )
+    )
+    assert "auto_tried_merged" in result
+    assert result["auto_tried_merged"] == 0
+
+
+def test_intel_next_step_kb_active_field_present(fresh_ctx, monkeypatch):
+    """IMP-07b: kb_active key always present in intel_next_step result."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p4_privesc",
+            tried=[],
+            findings=[],
+        )
+    )
+    assert "kb_active" in result
+    assert isinstance(result["kb_active"], bool)
+    # KB unavailable → kb_active=False
+    assert result["kb_active"] is False

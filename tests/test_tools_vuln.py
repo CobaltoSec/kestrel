@@ -79,8 +79,8 @@ def test_nuclei_targeted_invokes_cmd_with_ids(fresh_ctx, mock_via_kali):
     assert result["finding_count"] == 1
     assert result["findings"][0]["template-id"] == "CVE-2007-2447"
     cmd = mock_via_kali["calls"][0][0]
-    assert "-id CVE-2007-2447" in cmd
-    assert "-id samba" in cmd
+    # IMP-03: comma-separated, single -id flag
+    assert "-id CVE-2007-2447,samba" in cmd
     assert "-jsonl" in cmd
 
 
@@ -179,3 +179,40 @@ def test_msf_search_handles_exception(fresh_ctx, monkeypatch):
     result = asyncio.run(vuln_tools.vuln_msf_search(query="x"))
     assert result["available"] is False
     assert "error" in result["reason"]
+
+
+# ── IMP-03: nuclei comma-separated -id ──────────────────────────────────────
+
+
+def test_nuclei_targeted_multi_templates_comma_separated(fresh_ctx, mock_via_kali):
+    """IMP-03: multiple templates must produce a single -id CVE-A,CVE-B (not two -id flags)."""
+    mock_via_kali["return"]["result"] = ExecResult(stdout="", stderr="", rc=0, duration_s=1.0)
+    asyncio.run(
+        vuln_tools.vuln_nuclei_targeted(target="10.10.10.3", templates=["CVE-A", "CVE-B"])
+    )
+    cmd = mock_via_kali["calls"][0][0]
+    assert "-id CVE-A,CVE-B" in cmd
+    # Ensure there is only one -id flag, not two separate ones
+    assert cmd.count("-id ") == 1
+
+
+def test_nuclei_targeted_single_template_no_comma(fresh_ctx, mock_via_kali):
+    """Single template should still produce -id <name> without trailing comma."""
+    mock_via_kali["return"]["result"] = ExecResult(stdout="", stderr="", rc=0, duration_s=1.0)
+    asyncio.run(
+        vuln_tools.vuln_nuclei_targeted(target="10.10.10.3", templates=["CVE-2007-2447"])
+    )
+    cmd = mock_via_kali["calls"][0][0]
+    assert "-id CVE-2007-2447" in cmd
+    assert "," not in cmd.split("-id ")[1].split()[0]
+
+
+def test_nuclei_targeted_three_templates_comma_separated(fresh_ctx, mock_via_kali):
+    """Three templates: -id t1,t2,t3 (still one flag)."""
+    mock_via_kali["return"]["result"] = ExecResult(stdout="", stderr="", rc=0, duration_s=1.0)
+    asyncio.run(
+        vuln_tools.vuln_nuclei_targeted(target="10.10.10.3", templates=["t1", "t2", "t3"])
+    )
+    cmd = mock_via_kali["calls"][0][0]
+    assert "-id t1,t2,t3" in cmd
+    assert cmd.count("-id ") == 1

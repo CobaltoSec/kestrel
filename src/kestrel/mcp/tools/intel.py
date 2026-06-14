@@ -80,7 +80,12 @@ async def intel_classify_blind(
     attack_plan = build_attack_plan(categories, os_hint or "unknown", framework, ad_joined)
     kb_chunks: list[dict[str, Any]] = []
     try:
-        kb_chunks = query_kb(categories)
+        kb_chunks = await asyncio.wait_for(
+            asyncio.to_thread(query_kb, categories),
+            timeout=KB_QUERY_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        kb_chunks = []
     except Exception:
         kb_chunks = []
     return {
@@ -90,6 +95,8 @@ async def intel_classify_blind(
         "kb_chunks": kb_chunks,
         "os_hint": os_hint,
         "framework": framework,
+        "kb_active": len(kb_chunks) > 0,
+        "kb_note": None if kb_chunks else "KB no activa para este target — pasos son templates genéricos",
     }
 
 
@@ -303,6 +310,8 @@ async def intel_save_synthesis(
 _PHASE_KB_PREFIX: dict[str, str] = {
     "p2_enum": "enumeration service discovery",
     "p3_foothold": "initial access foothold exploit",
+    "p3a_pre_foothold": "initial access exploit CVE RCE web vulnerability",
+    "p3b_post_foothold": "post foothold shell upgrade loot enumeration",
     "p4_privesc": "privilege escalation post-exploitation",
 }
 
@@ -363,6 +372,80 @@ _PHASE_FALLBACK_STEPS: dict[str, list[dict[str, Any]]] = {
             "action": "nifi_check",
             "command": "curl -s http://{target}:8080/nifi/ | grep -i 'nifi\\|version'",
             "rationale": "Apache NiFi unauthenticated = Groovy ExecuteScript RCE.",
+            "source": "builtin",
+        },
+    ],
+    "p3a_pre_foothold": [
+        {
+            "priority": 1,
+            "action": "test_rce_endpoint",
+            "command": "curl -sv http://{target}/vulnerable-endpoint -d 'param=test'",
+            "rationale": "Probe RCE endpoint — verify response and headers before exploitation.",
+            "source": "builtin",
+        },
+        {
+            "priority": 2,
+            "action": "searchsploit_service",
+            "command": "searchsploit {service} {version}",
+            "rationale": "List CVEs applicable to the confirmed service version.",
+            "source": "builtin",
+        },
+        {
+            "priority": 3,
+            "action": "run_poc",
+            "command": "python3 exploit.py {target}",
+            "rationale": "Execute PoC if version is confirmed vulnerable.",
+            "source": "builtin",
+        },
+        {
+            "priority": 4,
+            "action": "sqli_auto",
+            "command": "sqlmap -u 'http://{target}/endpoint?param=1' --level=2 --risk=2",
+            "rationale": "Automated SQLi scan against confirmed injectable parameter.",
+            "source": "builtin",
+        },
+        {
+            "priority": 5,
+            "action": "brute_web_login",
+            "command": "hydra -l admin -P /usr/share/wordlists/rockyou.txt {target} http-post-form '/login:user=^USER^&pass=^PASS^:invalid'",
+            "rationale": "Credential brute-force against web login form.",
+            "source": "builtin",
+        },
+    ],
+    "p3b_post_foothold": [
+        {
+            "priority": 1,
+            "action": "pty_upgrade",
+            "command": "python3 -c 'import pty;pty.spawn(\"/bin/bash\")'",
+            "rationale": "Upgrade dumb shell to full PTY for interactive use.",
+            "source": "builtin",
+        },
+        {
+            "priority": 2,
+            "action": "fix_terminal",
+            "command": "export TERM=xterm && stty rows 38 cols 116",
+            "rationale": "Fix terminal dimensions after PTY upgrade.",
+            "source": "builtin",
+        },
+        {
+            "priority": 3,
+            "action": "basic_loot",
+            "command": "cat ~/.ssh/id_rsa ~/.bash_history /etc/passwd /etc/shadow 2>/dev/null",
+            "rationale": "Collect credentials and history immediately after shell access.",
+            "source": "builtin",
+        },
+        {
+            "priority": 4,
+            "action": "suid_search",
+            "command": "find / -perm -4000 -type f 2>/dev/null",
+            "rationale": "SUID binaries are the most common privesc path on HTB.",
+            "source": "builtin",
+        },
+        {
+            "priority": 5,
+            "action": "sudo_check",
+            "command": "sudo -l",
+            "rationale": "List sudo privileges for the current user.",
             "source": "builtin",
         },
     ],
@@ -650,7 +733,7 @@ def _detect_stuck_signals(session_dir_str: str, machine: str) -> list[str]:
             "machine": {"type": "string"},
             "current_phase": {
                 "type": "string",
-                "enum": ["p2_enum", "p3_foothold", "p4_privesc"],
+                "enum": ["p2_enum", "p3_foothold", "p3a_pre_foothold", "p3b_post_foothold", "p4_privesc"],
             },
             "tried": {
                 "type": "array",
@@ -682,6 +765,26 @@ async def intel_next_step(
     top_k: int = 5,
     session_dir: str = "",
 ) -> dict[str, Any]:
+    # IMP-17: Auto-cargar tried desde state para dedup cross-session
+    _auto_tried_count = 0
+    try:
+        _ctx = mcp_context.get_context()
+        _m = _ctx.state_store.get_machine(machine) if machine else None
+        _auto_tried: list[str] = []
+        if _m:
+            _auto_tried += [
+                c.password for c in (getattr(_m, "tried_credentials", None) or [])
+                if getattr(c, "result", None) == "auth_failed" and getattr(c, "password", None)
+            ]
+            _auto_tried += [
+                e.path for e in (getattr(_m, "tried_endpoints", None) or [])
+                if not getattr(e, "interesting", True)
+            ]
+        tried = list(set(tried or []) | set(_auto_tried))
+        _auto_tried_count = len(_auto_tried)
+    except Exception:
+        _auto_tried_count = 0
+
     query = _build_next_step_query(current_phase, findings, os_hint)
     kb_result = await intel_kb_query(query, top_k=top_k)
     chunks = kb_result.get("chunks", [])
@@ -714,11 +817,13 @@ async def intel_next_step(
         "phase": current_phase,
         "query_used": query,
         "kb_available": kb_result.get("available", False),
+        "kb_active": len(chunks) > 0,
         "stuck_signals": stuck_signals,
         "steps": steps[:top_k],
         "kb_chunks": chunks,
         "tried_count": len(tried),
         "findings_count": len(findings),
+        "auto_tried_merged": _auto_tried_count,
     }
 
 
