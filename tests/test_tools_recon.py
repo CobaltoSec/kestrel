@@ -466,3 +466,160 @@ def test_dirfuzz_saves_discovered_endpoints(fresh_ctx, mock_via_kali):
     eps = m.tried_endpoints or []
     # At least the root url should be saved
     assert len(eps) >= 1
+
+
+# ── IMP-06: dirfuzz bypass_header + extra_paths ──────────────────────────────
+
+
+def test_dirfuzz_bypass_header_injected(fresh_ctx, mock_via_kali):
+    """IMP-06: bypass_header param is injected into the feroxbuster command."""
+    mock_via_kali["return"]["result"] = ExecResult(stdout="", stderr="", rc=0, duration_s=1.0)
+    header = "x-middleware-subrequest: src/middleware:nowaf:middleware-edge"
+    asyncio.run(
+        recon_tools.recon_web_dirfuzz(
+            target="10.10.10.3", port=3000, machine="lame", bypass_header=header
+        )
+    )
+    calls = mock_via_kali["calls"]
+    assert len(calls) >= 1
+    cmd = calls[0][0]
+    assert "x-middleware-subrequest" in cmd, f"bypass_header not in cmd: {cmd}"
+
+
+def test_dirfuzz_extra_paths_triggers_second_run(fresh_ctx, mock_via_kali):
+    """IMP-06: extra_paths causes a second feroxbuster call against /tmp/kestrel_extra_paths.txt."""
+    mock_via_kali["return"]["result"] = ExecResult(stdout="", stderr="", rc=0, duration_s=0.5)
+    asyncio.run(
+        recon_tools.recon_web_dirfuzz(
+            target="10.10.10.3", port=3000, machine="lame",
+            extra_paths=["api/users", "metrics", "rods", "criticality"],
+        )
+    )
+    calls = mock_via_kali["calls"]
+    # Should have at least 2 calls: main dirfuzz + extra_paths run
+    assert len(calls) >= 2, f"Expected 2+ calls, got {len(calls)}"
+    combined = " ".join(c[0] for c in calls)
+    assert "kestrel_extra_paths.txt" in combined, f"No extra_paths temp file in calls: {combined}"
+
+
+# ── IMP-02: static RSC detection ─────────────────────────────────────────────
+
+
+def test_fingerprint_nextjs_static_detected(fresh_ctx, mock_via_kali):
+    """IMP-02: Next.js detected via _next body → _probe_nextjs fires, is_static=True when no server actions."""
+    calls = mock_via_kali["calls"]
+    call_results: list[ExecResult] = [
+        # First call: basic fingerprint (headers + body with _next)
+        ExecResult(
+            stdout=(
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\n"
+                "---BODY---\n<html><head><title>ReactorWatch</title></head>"
+                '<script src="/_next/static/chunks/main.js"></script></html>'
+            ),
+            stderr="", rc=0, duration_s=0.5,
+        ),
+        # Second call: _probe_nextjs (manifest status + RSC chunk)
+        ExecResult(
+            stdout="404\n---RSC---\n",
+            stderr="", rc=0, duration_s=0.3,
+        ),
+    ]
+    call_index = [0]
+
+    def multi_result(cmd: str, timeout: float = 120.0, **kwargs):
+        i = call_index[0]
+        call_index[0] += 1
+        return call_results[min(i, len(call_results) - 1)]
+
+    import kestrel.transport.kali_proxy as kp
+    original = kp.via_kali
+    kp.via_kali = multi_result
+    try:
+        result = asyncio.run(
+            recon_tools.recon_web_fingerprint(target="10.10.10.3", port=3000, machine="lame")
+        )
+    finally:
+        kp.via_kali = original
+
+    assert result.get("nextjs_analysis") is not None, "nextjs_analysis should be set"
+    na = result["nextjs_analysis"]
+    assert na["detected"] is True
+    assert na["is_static"] is True
+    assert na["has_server_actions"] is False
+    assert na["operator_hint"] is not None
+
+
+def test_fingerprint_nextjs_with_server_actions(fresh_ctx, mock_via_kali):
+    """IMP-02: RSC chunk contains '"S":true → has_server_actions=True, is_static=False."""
+    import kestrel.transport.kali_proxy as kp
+
+    call_results = [
+        ExecResult(
+            stdout=(
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\n"
+                '---BODY---\n<html>app<script src="/_next/static/x.js"></script></html>'
+            ),
+            stderr="", rc=0, duration_s=0.4,
+        ),
+        ExecResult(
+            stdout='200\n---RSC---\n1:["$","div",null,{"children":"hello"},"S":true]',
+            stderr="", rc=0, duration_s=0.2,
+        ),
+    ]
+    call_index = [0]
+
+    def multi_result(cmd: str, timeout: float = 120.0, **kwargs):
+        i = call_index[0]
+        call_index[0] += 1
+        return call_results[min(i, len(call_results) - 1)]
+
+    original = kp.via_kali
+    kp.via_kali = multi_result
+    try:
+        result = asyncio.run(
+            recon_tools.recon_web_fingerprint(target="10.10.10.3", port=3000, machine="lame")
+        )
+    finally:
+        kp.via_kali = original
+
+    na = result.get("nextjs_analysis")
+    assert na is not None
+    assert na["has_server_actions"] is True
+    assert na["is_static"] is False
+    assert na["operator_hint"] is None
+
+
+# ── IMP-05: recon_web_username_extract ───────────────────────────────────────
+
+
+def test_username_extract_basic(fresh_ctx):
+    """IMP-05: extracts proper names from HTML and generates username variants."""
+    html = """
+    <html><body>
+    <h2>Our Team</h2>
+    <p>Dr. Elena Rodriguez — Chief Scientist</p>
+    <p>Marcus Kim — Systems Engineer</p>
+    <p>James Thompson — Operations Lead</p>
+    </body></html>
+    """
+    result = asyncio.run(recon_tools.recon_web_username_extract(html=html))
+    names = result["names"]
+    candidates = result["username_candidates"]
+    assert len(names) >= 2, f"Expected ≥2 names, got {names}"
+    # Standard variants should be present
+    assert "erodriguez" in candidates or "elena" in candidates, candidates
+    assert "mkim" in candidates or "marcus" in candidates, candidates
+    assert result["candidate_count"] > 0
+
+
+def test_username_extract_saves_wordlist(fresh_ctx, tmp_path):
+    """IMP-05: when machine given, saves usernames.txt to session_dir/recon/."""
+    html = "<html><body><span>Sarah Mitchell</span></body></html>"
+    result = asyncio.run(
+        recon_tools.recon_web_username_extract(html=html, machine="lame")
+    )
+    assert result["wordlist_path"] is not None
+    wl = Path(result["wordlist_path"])
+    assert wl.exists(), f"Wordlist not created at {wl}"
+    content = wl.read_text()
+    assert "sarah" in content or "mitchell" in content or "smitchell" in content, content

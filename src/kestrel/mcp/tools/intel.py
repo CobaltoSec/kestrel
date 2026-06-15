@@ -203,11 +203,37 @@ def _exploitdb_local_lookup(product: str, version: str) -> list[dict[str, Any]]:
     name="intel_cve_lookup",
     description=(
         "Ranked CVE pipeline for product+version: 1) KB synthesis chunks 2) NVD API "
-        "3) ExploitDB local CSV 4) MSF search RPC. Each backend independent — failures don't block."
+        "3) ExploitDB local CSV 4) MSF search RPC. Each backend independent — failures don't block. "
+        "IMP-03: if target + auto_nuclei=True, automatically runs vuln_nuclei_targeted against "
+        "high-priority CVEs (priority>=2, i.e. those with ExploitDB entries), saving a manual tool call."
     ),
     category="intel",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "product": {"type": "string"},
+            "version": {"type": "string"},
+            "target": {
+                "type": "string",
+                "description": "Target URL/IP for auto-nuclei run (e.g. 'http://10.10.10.x:3000').",
+            },
+            "machine": {"type": "string"},
+            "auto_nuclei": {
+                "type": "boolean",
+                "default": True,
+                "description": "Auto-run nuclei against high-priority CVEs when target is provided.",
+            },
+        },
+        "required": ["product", "version"],
+    },
 )
-async def intel_cve_lookup(product: str, version: str) -> dict[str, Any]:
+async def intel_cve_lookup(
+    product: str,
+    version: str,
+    target: str | None = None,
+    machine: str | None = None,
+    auto_nuclei: bool = True,
+) -> dict[str, Any]:
     # QW: KB query and NVD run concurrently — saves ~3-8s vs sequential awaits.
     kb_result, nvd = await asyncio.gather(
         intel_kb_query(f"{product} {version} CVE exploit", top_k=3),
@@ -220,6 +246,21 @@ async def intel_cve_lookup(product: str, version: str) -> dict[str, Any]:
     # MSF search via RPC deferred — LLM can call vuln_msf_search explicitly.
     msf_results: list[dict[str, Any]] = []
 
+    ranked_cves = _rank_cves(kb_chunks, nvd, edb)
+
+    # IMP-03: auto-run nuclei against high-priority CVEs when target provided
+    nuclei_auto_result: dict[str, Any] = {}
+    if auto_nuclei and target:
+        high_priority_ids = [
+            c["cve_id"] for c in ranked_cves
+            if c.get("priority", 0) >= 2 and c.get("cve_id")
+        ][:5]
+        if high_priority_ids:
+            from kestrel.mcp.tools.vuln import vuln_nuclei_targeted  # local import avoids circular
+            nuclei_auto_result = await vuln_nuclei_targeted(
+                target, high_priority_ids, machine=machine
+            )
+
     return {
         "product": product,
         "version": version,
@@ -229,7 +270,10 @@ async def intel_cve_lookup(product: str, version: str) -> dict[str, Any]:
             "exploitdb_local": edb,
             "msf": msf_results,
         },
-        "ranked_cves": _rank_cves(kb_chunks, nvd, edb),
+        "ranked_cves": ranked_cves,
+        "nuclei_auto_run": bool(nuclei_auto_result),
+        "nuclei_findings": nuclei_auto_result.get("findings", []),
+        "nuclei_finding_count": nuclei_auto_result.get("finding_count", 0),
     }
 
 
@@ -335,41 +379,48 @@ _PHASE_FALLBACK_STEPS: dict[str, list[dict[str, Any]]] = {
         },
         {
             "priority": 3,
+            "action": "udp_top100_scan",
+            "command": "nmap -sU -T4 --top-ports 100 --max-rtt-timeout 200ms --max-retries 1 {target}",
+            "rationale": "UDP scan — reveals SNMP (161), TFTP (69), DNS (53), NTP (123). Often skipped but critical on HTB boxes.",
+            "source": "builtin",
+        },
+        {
+            "priority": 4,
             "action": "smb_enum",
             "command": "smbclient -L //{target} -N && nmap --script smb-enum-shares,smb-enum-users -p 445 {target}",
             "rationale": "SMB null session often reveals shares and usernames on HTB boxes.",
             "source": "builtin",
         },
         {
-            "priority": 4,
+            "priority": 5,
             "action": "web_dir_fuzz",
             "command": "gobuster dir -u http://{target} -w /usr/share/seclists/Discovery/Web-Content/common.txt -x php,txt,bak",
             "rationale": "Directory brute-force exposes admin panels and backup files.",
             "source": "builtin",
         },
         {
-            "priority": 5,
+            "priority": 6,
             "action": "db_port_scan",
             "command": "nmap -sV -p 3306,5432,27017,1433,6379,5984 {target}",
             "rationale": "Database services often exposed without auth on lab boxes.",
             "source": "builtin",
         },
         {
-            "priority": 6,
+            "priority": 7,
             "action": "docker_api_check",
             "command": "curl -s http://{target}:2375/info 2>/dev/null | python3 -m json.tool || echo no docker api",
             "rationale": "Docker API on 2375 (no TLS) = instant RCE via container exec.",
             "source": "builtin",
         },
         {
-            "priority": 7,
+            "priority": 8,
             "action": "ics_ot_scan",
             "command": "nmap -sV -p 4840,102,502,20000,44818,47808 {target}",
             "rationale": "OPC-UA (4840), S7 (102), Modbus (502) — ICS/OT attack surface.",
             "source": "builtin",
         },
         {
-            "priority": 8,
+            "priority": 9,
             "action": "nifi_check",
             "command": "curl -s http://{target}:8080/nifi/ | grep -i 'nifi\\|version'",
             "rationale": "Apache NiFi unauthenticated = Groovy ExecuteScript RCE.",

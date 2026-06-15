@@ -321,3 +321,56 @@ def test_rabbit_hole_old_events_ignored(tmp_path: Path):
     )
     code, out = run(session)
     assert "rabbit_hole" not in out["signals"]
+
+
+# ─── IMP-01 — web-only / Next.js alternatives ────────────────────────────────
+
+
+def test_alternatives_nextjs_web_only(tmp_path: Path):
+    """IMP-01: Next.js-only box → alternatives include RSC probe + udp fallback."""
+    session = make_session(
+        tmp_path,
+        estado="all creds auth_failed auth_failed auth_failed",
+        findings="| 22 | ssh | OpenSSH 9.6p1 |\n| 3000 | http | Next.js 15.0.3 |",
+        jsonl_lines=[
+            {"ts": "2026-06-14T20:00:00Z", "event": "auth_failed"},
+            {"ts": "2026-06-14T20:01:00Z", "event": "auth_failed"},
+            {"ts": "2026-06-14T20:02:00Z", "event": "auth_failed"},
+        ],
+    )
+    code, out = run(session)
+    assert code == 1
+    assert "web-nextjs-rsc-probe" in out["alternatives"], out["alternatives"]
+    assert "udp-scan-top100" in out["alternatives"], out["alternatives"]
+    assert "osint-company-default-creds" in out["alternatives"], out["alternatives"]
+
+
+def test_alternatives_ssh_plus_web_combo(tmp_path: Path):
+    """IMP-01: SSH + HTTP → includes username harvest alternative."""
+    session = make_session(
+        tmp_path,
+        estado="spray failed auth_failed auth_failed auth_failed",
+        findings="| 22 | ssh | |\n| 80 | http | Apache |",
+        jsonl_lines=[
+            {"ts": "2026-06-14T20:00:00Z", "event": "auth_failed"},
+            {"ts": "2026-06-14T20:01:00Z", "event": "auth_failed"},
+            {"ts": "2026-06-14T20:02:00Z", "event": "auth_failed"},
+        ],
+    )
+    code, out = run(session)
+    assert code == 1
+    assert "ssh-username-harvest-from-web" in out["alternatives"], out["alternatives"]
+
+
+def test_alternatives_universal_fallback_always_present(tmp_path: Path):
+    """IMP-01: any stuck scenario always includes udp-scan-top100 + osint fallbacks."""
+    session = make_session(
+        tmp_path,
+        estado="shell se cae con connection reset",
+        findings="| 22 | ssh | OpenSSH 9.6p1 |",
+    )
+    code, out = run(session)
+    assert code == 1
+    assert "shell_lost" in out["signals"]
+    assert "udp-scan-top100" in out["alternatives"], out["alternatives"]
+    assert "osint-company-default-creds" in out["alternatives"], out["alternatives"]

@@ -265,6 +265,19 @@ def alternatives_from_findings(findings_md: str) -> list[str]:
         alts.append("ics-service-check")
     if "support-bundle" in blob or "support_bundle" in blob or "backup" in blob:
         alts.append("backup-file-enum")
+    # IMP-01: web-only / Next.js surface — boxes with just web + SSH
+    if "next.js" in blob or "nextjs" in blob or ("next" in blob and "3000" in blob):
+        alts.extend(["web-nextjs-rsc-probe", "web-api-path-fuzzing", "web-vhost-enum"])
+    if any(p in blob for p in ["3000", "8080", "8000", "8888", "5000"]) and "http" in blob:
+        alts.append("web-nonstandard-port-fuzz")
+    # SSH + web combo → username harvest from page content
+    if ("22" in blob or "ssh" in blob) and ("http" in blob or "3000" in blob or "web" in blob):
+        alts.append("ssh-username-harvest-from-web")
+    # Universal fallbacks — always present when truly stuck
+    if "udp-scan-top100" not in alts:
+        alts.append("udp-scan-top100")
+    if "osint-company-default-creds" not in alts:
+        alts.append("osint-company-default-creds")
     return list(dict.fromkeys(alts))
 
 

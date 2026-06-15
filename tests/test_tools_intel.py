@@ -851,3 +851,94 @@ def test_intel_next_step_kb_active_field_present(fresh_ctx, monkeypatch):
     assert isinstance(result["kb_active"], bool)
     # KB unavailable → kb_active=False
     assert result["kb_active"] is False
+
+
+# ── IMP-04: UDP step in p2_enum fallback ─────────────────────────────────────
+
+
+def test_p2_enum_includes_udp_step(fresh_ctx, monkeypatch):
+    """IMP-04: p2_enum fallback steps must include udp_top100_scan."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p2_enum",
+            tried=[],
+            findings=[],
+        )
+    )
+    actions = [s["action"] for s in result["steps"]]
+    assert "udp_top100_scan" in actions, f"udp_top100_scan missing from p2_enum steps: {actions}"
+
+
+def test_p2_enum_udp_step_has_correct_command(fresh_ctx, monkeypatch):
+    """IMP-04: UDP step command uses nmap -sU --top-ports 100."""
+    monkeypatch.delenv("KESTREL_KB_PATH", raising=False)
+    result = asyncio.run(
+        intel_tools.intel_next_step(
+            machine="lame",
+            current_phase="p2_enum",
+            tried=[],
+            findings=[],
+        )
+    )
+    udp_steps = [s for s in result["steps"] if s["action"] == "udp_top100_scan"]
+    assert udp_steps, "No udp_top100_scan step found"
+    cmd = udp_steps[0]["command"]
+    assert "-sU" in cmd, f"UDP flag missing in cmd: {cmd}"
+    assert "--top-ports" in cmd, f"--top-ports missing in cmd: {cmd}"
+
+
+# ── IMP-03: auto-nuclei in intel_cve_lookup ──────────────────────────────────
+
+
+def test_cve_lookup_auto_nuclei_skipped_when_no_target(fresh_ctx, monkeypatch):
+    """IMP-03: without target, nuclei_auto_run=False and no nuclei call made."""
+    async def fake_nvd(product, version):
+        return [{"cve_id": "CVE-2025-29927", "description": "Next.js middleware bypass", "published": "2025"}]
+
+    monkeypatch.setattr(intel_tools, "_nvd_lookup", fake_nvd)
+    monkeypatch.setattr(intel_tools, "_exploitdb_local_lookup", lambda p, v: [
+        {"id": "99999", "title": "Next.js CVE-2025-29927 middleware bypass"}
+    ])
+
+    result = asyncio.run(
+        intel_tools.intel_cve_lookup(product="next.js", version="15.0.3")
+    )
+    assert result["nuclei_auto_run"] is False
+    assert result["nuclei_findings"] == []
+    assert result["nuclei_finding_count"] == 0
+
+
+def test_cve_lookup_auto_nuclei_fires_on_high_priority(fresh_ctx, monkeypatch):
+    """IMP-03: when target provided + high-priority CVE, nuclei_auto_run=True."""
+    from unittest.mock import AsyncMock, patch
+
+    async def fake_nvd(product, version):
+        return [{"cve_id": "CVE-2025-29927", "description": "Next.js middleware bypass", "published": "2025"}]
+
+    monkeypatch.setattr(intel_tools, "_nvd_lookup", fake_nvd)
+    monkeypatch.setattr(intel_tools, "_exploitdb_local_lookup", lambda p, v: [
+        {"id": "99999", "title": "Next.js CVE-2025-29927 middleware bypass"}
+    ])
+
+    nuclei_called_with: list = []
+
+    async def fake_nuclei_targeted(target, templates, machine=None, **kwargs):
+        nuclei_called_with.append({"target": target, "templates": templates})
+        return {"findings": [], "finding_count": 0}
+
+    with patch("kestrel.mcp.tools.vuln.vuln_nuclei_targeted", new=fake_nuclei_targeted):
+        result = asyncio.run(
+            intel_tools.intel_cve_lookup(
+                product="next.js",
+                version="15.0.3",
+                target="http://10.10.10.3:3000",
+                machine="lame",
+                auto_nuclei=True,
+            )
+        )
+
+    assert result["nuclei_auto_run"] is True, f"Expected nuclei_auto_run=True, got {result}"
+    assert len(nuclei_called_with) == 1, f"Expected 1 nuclei call, got {nuclei_called_with}"
+    assert "CVE-2025-29927" in nuclei_called_with[0]["templates"]

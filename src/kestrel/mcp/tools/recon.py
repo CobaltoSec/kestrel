@@ -310,7 +310,46 @@ async def recon_web_fingerprint(
     artifact = _save_artifact(machine, "web", f"{target}_{port}.txt", raw["stdout"])
     # IMP-19: persist endpoint to state
     _save_endpoint_tried(machine, url, status=status_code, interesting=bool(fp["title"]))
-    return {**fp, "rc": raw["rc"], "artifact": artifact}
+
+    # IMP-02: static RSC detection — only fires when Next.js is detected
+    nextjs_analysis: dict[str, Any] | None = None
+    powered_by = (fp.get("powered_by") or "").lower()
+    if "_next" in body.lower() or powered_by.startswith("next"):
+        nextjs_analysis = await _probe_nextjs(target, port)
+
+    return {**fp, "rc": raw["rc"], "artifact": artifact, "nextjs_analysis": nextjs_analysis}
+
+
+async def _probe_nextjs(target: str, port: int) -> dict[str, Any]:
+    """IMP-02: lightweight Next.js static-vs-dynamic probe (2 curl calls, ~15s max)."""
+    scheme = "https" if port in (443, 8443) else "http"
+    base = f"{scheme}://{target}:{port}"
+    cmd = (
+        f"curl -ks --max-time 10 -o /dev/null -w '%{{http_code}}' "
+        f"{shlex.quote(base + '/_next/data/buildManifest.json')} ; "
+        f"echo '---RSC---' ; "
+        f"curl -ks --max-time 10 {shlex.quote(base + '/__next_f')} 2>/dev/null | head -c 300"
+    )
+    raw = await _run_kali(cmd, timeout=25.0)
+    parts = raw["stdout"].split("---RSC---", 1)
+    manifest_status = parts[0].strip()
+    rsc_chunk = parts[1].strip() if len(parts) > 1 else ""
+    # Server Actions presence: RSC payload contains "S":true or "action" references
+    has_server_actions = '"S":true' in rsc_chunk or '"action"' in rsc_chunk
+    is_static = not has_server_actions
+    hint: str | None = None
+    if is_static:
+        hint = (
+            "Next.js puro estático — sin Server Actions ni rutas protegidas detectadas. "
+            "Superficie web mínima → pivotear a SSH + UDP scan + domain-themed paths."
+        )
+    return {
+        "detected": True,
+        "is_static": is_static,
+        "has_build_manifest": manifest_status == "200",
+        "has_server_actions": has_server_actions,
+        "operator_hint": hint,
+    }
 
 
 @registry.tool(
@@ -437,6 +476,8 @@ async def recon_web_dirfuzz(
     extensions: str = "php,txt,bak,html",
     depth: int = 2,
     machine: str | None = None,
+    bypass_header: str | None = None,
+    extra_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     # IMP-16: skip if already tried and not interesting
     if _check_endpoint_tried(target, port, machine):
@@ -446,6 +487,9 @@ async def recon_web_dirfuzz(
     scheme = "https" if port in (443, 8443) else "http"
     base_url = f"{scheme}://{target}:{port}/"
 
+    # IMP-06: optional bypass header (e.g. x-middleware-subrequest for Next.js middleware bypass)
+    header_arg = f"-H {shlex.quote(bypass_header)}" if bypass_header else ""
+
     # Build feroxbuster command; fall back to gobuster check
     ferox_cmd = (
         f"command -v feroxbuster >/dev/null 2>&1 && "
@@ -454,7 +498,7 @@ async def recon_web_dirfuzz(
         f"--extensions {shlex.quote(extensions)} "
         f"--depth {depth} "
         f"--no-state --no-recursion-limit --silent "
-        f"--timeout 10 -k 2>/dev/null "
+        f"--timeout 10 -k {header_arg} 2>/dev/null "
         f"|| command -v gobuster >/dev/null 2>&1 && "
         f"gobuster dir --url {shlex.quote(base_url)} "
         f"--wordlist {shlex.quote(wordlist)} "
@@ -473,10 +517,26 @@ async def recon_web_dirfuzz(
         }
 
     discovered = _parse_feroxbuster(raw["stdout"])
+    raw_output = raw["stdout"]
+
+    # IMP-06: extra_paths — domain-themed paths fuzzed as a second pass
+    if extra_paths:
+        paths_content = "\n".join(extra_paths)
+        extra_cmd = (
+            f"echo {shlex.quote(paths_content)} > /tmp/kestrel_extra_paths.txt && "
+            f"command -v feroxbuster >/dev/null 2>&1 && "
+            f"feroxbuster --url {shlex.quote(base_url)} "
+            f"--wordlist /tmp/kestrel_extra_paths.txt "
+            f"--no-state --silent --timeout 10 -k {header_arg} 2>/dev/null"
+        )
+        extra_raw = await _run_kali(extra_cmd, timeout=120.0)
+        discovered += _parse_feroxbuster(extra_raw["stdout"])
+        raw_output += "\n--- extra_paths ---\n" + extra_raw["stdout"]
+
     artifact = _save_artifact(
         machine, "dirfuzz",
         f"{target}_{port}.txt",
-        raw["stdout"],
+        raw_output,
     )
 
     # IMP-19: save interesting paths to tried_endpoints
@@ -497,4 +557,122 @@ async def recon_web_dirfuzz(
         "discovered": discovered,
         "discovered_count": len(discovered),
         "artifact": artifact,
+        "bypass_header_used": bypass_header,
+        "extra_paths_count": len(extra_paths) if extra_paths else 0,
+    }
+
+
+# IMP-05: recon_web_username_extract ──────────────────────────────────────────
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_PROPER_NAME_RE = re.compile(r"\b([A-Z][a-z]{2,15})\s+([A-Z][a-z]{2,15})\b")
+
+# Common false-positive words that look like proper names
+_NAME_STOPWORDS = frozenset({
+    "About", "Admin", "Alert", "Allow", "Apply", "Back", "Base", "Blog", "Body",
+    "Bold", "Bool", "Boot", "Build", "Call", "Card", "Chat", "Check", "Class",
+    "Click", "Code", "Come", "Core", "Dark", "Data", "Date", "Default", "Delete",
+    "Demo", "Deploy", "Desc", "Design", "Down", "Each", "Edit", "Email", "Enable",
+    "Enter", "Error", "Event", "Exit", "File", "Find", "First", "Fixed", "Flag",
+    "Follow", "Footer", "Form", "Free", "From", "Full", "Grid", "Head", "Help",
+    "High", "Home", "Html", "Http", "Info", "Init", "Item", "Json", "Just", "Keep",
+    "Last", "Layout", "Link", "List", "Live", "Load", "Login", "Logo", "Loop",
+    "Mail", "Main", "Make", "Menu", "Meta", "Mode", "More", "Move", "Name", "Next",
+    "None", "Note", "Null", "Once", "Only", "Open", "Page", "Pass", "Path", "Plan",
+    "Post", "Print", "Props", "Read", "Real", "Role", "Root", "Rule", "Safe",
+    "Save", "Send", "Size", "Some", "Sort", "Start", "State", "Step", "Stop",
+    "Style", "Sync", "Tags", "Task", "Test", "Text", "Time", "Title", "Type",
+    "Unit", "User", "Value", "View", "Wait", "With", "Work",
+})
+
+
+def _strip_html(html: str) -> str:
+    return _HTML_TAG_RE.sub(" ", html)
+
+
+def _generate_username_variants(first: str, last: str) -> list[str]:
+    f, l = first.lower(), last.lower()
+    return [
+        f,
+        l,
+        f"{f[0]}{l}",           # flastname
+        f"{f}{l}",               # firstlastname
+        f"{f}.{l}",              # first.last
+        f"{f}{l[0]}",            # firstl
+        f"{f[0]}.{l}",          # f.last
+    ]
+
+
+@registry.tool(
+    name="recon_web_username_extract",
+    description=(
+        "Extract proper names from web page HTML and generate SSH username candidates. "
+        "IMP-05: Use after recon_web_fingerprint when page content includes staff names. "
+        "Saves wordlist to <session_dir>/recon/usernames.txt if machine given. "
+        "Pure Python — no Kali call needed."
+    ),
+    category="recon",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "html": {
+                "type": "string",
+                "description": "Raw HTML or text from the web page (recon_web_fingerprint body output).",
+            },
+            "machine": {"type": "string"},
+        },
+        "required": ["html"],
+    },
+)
+async def recon_web_username_extract(
+    html: str,
+    machine: str | None = None,
+) -> dict[str, Any]:
+    text = _strip_html(html)
+    raw_pairs = _PROPER_NAME_RE.findall(text)
+
+    names: list[str] = []
+    candidates: list[str] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for first, last in raw_pairs:
+        if first in _NAME_STOPWORDS or last in _NAME_STOPWORDS:
+            continue
+        pair = (first.lower(), last.lower())
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        names.append(f"{first} {last}")
+        candidates.extend(_generate_username_variants(first, last))
+
+    # Dedup preserving order, cap at 50
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
+            if len(deduped) >= 50:
+                break
+
+    wordlist_path: str | None = None
+    if machine and deduped:
+        artifact_path = _save_artifact(machine, "recon", "usernames.txt", "\n".join(deduped) + "\n")
+        wordlist_path = artifact_path
+
+    await _auto_narrate(
+        "🔍",
+        f"username extract: {len(names)} names → {len(deduped)} SSH candidates",
+        machine,
+    )
+
+    return {
+        "names": names,
+        "username_candidates": deduped,
+        "candidate_count": len(deduped),
+        "wordlist_path": wordlist_path,
+        "ssh_spray_hint": (
+            f"nxc ssh {{target}} -u /tmp/users.txt -p /usr/share/wordlists/rockyou.txt --no-bruteforce"
+            if deduped else None
+        ),
     }

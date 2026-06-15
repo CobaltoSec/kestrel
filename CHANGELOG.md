@@ -8,6 +8,32 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v0.7.0 (RT-KESTREL-V07 — Web-Only Pivot Sprint)
+
+**6 mejoras post-mortem Reactor — objetivo: -2.5h en máquinas web-only (2026-06-15):**
+
+#### IMP-01 — stuck_check alternatives web-only
+- `core/stuck.py`: `alternatives_from_findings()` extendida con patterns web-only: Next.js/port 3000 → `web-nextjs-rsc-probe`, `web-api-path-fuzzing`, `web-vhost-enum`; HTTP non-standard port → `web-nonstandard-port-fuzz`; SSH+web combo → `ssh-username-harvest-from-web`. Fallbacks universales `udp-scan-top100` y `osint-company-default-creds` siempre presentes cuando stuck. Soluciona `alternatives: []` en boxes web-only que bloqueó Reactor ~3h.
+
+#### IMP-02 — Static RSC detection en recon_web_fingerprint
+- `mcp/tools/recon.py`: nueva función `_probe_nextjs(target, port)` — 2 curl calls (~15s) si Next.js detectado: chequea `/_next/data/buildManifest.json` y `/__next_f` (RSC chunk). Detecta `has_server_actions` via `"S":true`/`"action"` en RSC payload. Si `is_static=True` emite `operator_hint` para pivotar a SSH/UDP en vez de continuar web enum.
+
+#### IMP-03 — Auto-nuclei en intel_cve_lookup
+- `mcp/tools/intel.py`: `intel_cve_lookup()` acepta parámetros opcionales `target`, `machine`, `auto_nuclei=True`. Cuando hay CVEs de alta prioridad (has_exploitdb=True, priority≥2) y `target` presente, ejecuta automáticamente `vuln_nuclei_targeted` contra los CVE IDs. Retorna `nuclei_auto_run`, `nuclei_findings`, `nuclei_finding_count`. Import local de `vuln_nuclei_targeted` evita circular import.
+
+#### IMP-04 — UDP scan en p2_enum fallback
+- `mcp/tools/intel.py`: `_PHASE_FALLBACK_STEPS["p2_enum"]` — nuevo step `udp_top100_scan` insertado en priority 3 (`nmap -sU -T4 --top-ports 100`). Steps previos (smb_enum, web_dir_fuzz, etc.) renumerados 4-9. Soluciona blind spot: en Reactor nunca se hizo UDP scan.
+
+#### IMP-05 — recon_web_username_extract (nueva tool)
+- `mcp/tools/recon.py`: nueva tool `recon_web_username_extract(html, machine)`. Puro Python (sin Kali call). Extrae nombres propios del HTML con regex + stopwords. Genera variantes SSH: `firstname`, `flastname`, `firstlastname`, `first.last`, `f.last`, `firstl`. Max 50 candidates deduplicados. Guarda `<session_dir>/recon/usernames.txt` si `machine` dado. En Reactor había 3 nombres visibles (Elena Rodriguez, Marcus Kim, James Thompson) — nunca procesados.
+
+#### IMP-06 — recon_web_dirfuzz: bypass_header + extra_paths
+- `mcp/tools/recon.py`: `recon_web_dirfuzz()` acepta `bypass_header: str | None` (e.g. `x-middleware-subrequest: src/middleware:nowaf:...` para CVE-2025-29927) inyectado via `-H` en feroxbuster. Acepta `extra_paths: list[str] | None` para paths temáticos de dominio — escritos a `/tmp/kestrel_extra_paths.txt` en Kali y fuzzeados como segundo pase.
+
+**Tests:** 425 passed (+13 nuevos), 16 skipped. 0 failures.
+
+---
+
 ### v0.6.0 (RT-KESTREL-V06 — Operational Hardening Sprint)
 
 **9 mejoras de seguridad operacional (2026-06-14):**
