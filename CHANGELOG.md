@@ -8,6 +8,11 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-15
+
+### Fixed
+- `kali_proxy.py`: `paramiko.NoValidConnectionsError` no existe como atributo top-level en algunas versiones de paramiko — importar desde `paramiko.ssh_exception` para evitar `AttributeError` al intentar capturar errores de conexión SSH.
+
 ### v0.7.0 (RT-KESTREL-V07 — Web-Only Pivot Sprint)
 
 **6 mejoras post-mortem Reactor — objetivo: -2.5h en máquinas web-only (2026-06-15):**

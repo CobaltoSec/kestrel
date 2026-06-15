@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 import paramiko
+from paramiko.ssh_exception import NoValidConnectionsError as _NoValidConnectionsError
 
 from kestrel.transport.base import ExecResult
 from kestrel.transport.ssh import SSHSession
@@ -62,7 +63,7 @@ def via_kali(
     sess = session or get_default_kali_session()
     try:
         return sess.exec(cmd, timeout=timeout)
-    except (paramiko.AuthenticationException, paramiko.NoValidConnectionsError) as e:
+    except (paramiko.AuthenticationException, _NoValidConnectionsError) as e:
         reason = "auth_failed" if "Authentication" in str(e) else "connect_failed"
     except socket.timeout:
         reason = "socket_timeout"
