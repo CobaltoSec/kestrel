@@ -48,17 +48,15 @@
 
 ---
 
-## RT-KESTREL-V09 — Intelligence Loop (2-3h)
+## RT-KESTREL-V09 — Intelligence Loop ← CERRADO 2026-07-01
 
-**Objetivo:** El framework detecta cuando está trabado y cambia de vector sin intervención.
+1. ~~**intel_next_step loop**~~ — ✅ ya estaba en SKILL.md — verificado.
+2. ~~**Stuck detection automático**~~ — ✅ DONE. `rabbit_hole` bug fix en `heartbeat.py`; `stuck_check` wired en p1/p2/p4; SKILL.md: "3 tools consecutivos sin findings".
+3. ~~**KB integration real**~~ — ✅ DONE. Path auto-detection fix en `intel.py` + `fingerprint.py`; deps instaladas; KB import funciona (Ollama bge-m3 + pgvector Tailscale).
+4. ~~**lolbin_suggest en post-explotación**~~ — ✅ DONE. Wired en `p4_privesc` + SKILL.md.
+5. ~~**Rabbit hole detection**~~ — ✅ ya estaba en SKILL.md — verificado.
 
-1. **intel_next_step loop** — SKILL.md debe instruir llamar `intel_next_step` cada N steps fallidos, no solo al inicio. Actualmente se llama una vez y el modelo improvisa.
-2. **Stuck detection automático** — `stuck_check` debe llamarse después de 3 tools consecutivos sin progreso. El tool ya existe y funciona — el modelo simplemente no lo llama.
-3. **KB integration real** — conectar pgvector E16 desde Kestrel: `KESTREL_KB_PATH` debe apuntar al socket de `kb-pgvector :5433`. Actualmente usa fallback templates builtin (funcionan, pero pierde todos los ATT&CK/HackTricks del KB).
-4. **lolbin_suggest en post-explotación** — después de `post_enum_system`, llamar `lolbin_suggest` con los binarios encontrados. Tool implementado pero nunca invocado.
-5. **Rabbit hole detection** — `stuck_check` ya detecta rabbit holes (mismo output 3+ veces en 20min). Agregar instrucción en SKILL.md para actuar sobre `rabbit_hole: true`.
-
-**Deliverable:** Kestrel completa máquinas Medium sin trabarse más de 30min en un vector muerto.
+**Commit:** `502cd04`. Tests: 446 passed.
 
 ---
 
@@ -76,17 +74,23 @@
 
 ---
 
-## RT-KESTREL-V10b — ReAct Agent Headless (2-3 sesiones) ← DIFERENCIADOR
+## RT-KESTREL-V10b — ReAct Agent Headless ← EN CURSO (S1 done, S2 pending)
 
 **Objetivo:** Kestrel corre solo, sin Claude Code. Agente que pwna HTB machines autónomamente.
 
-El `agent/` ya existe como stub (`NotImplementedError`). Implementarlo convierte Kestrel de "MCP server que Claude usa" a "agente autónomo de red-team".
+### S1 — Skeleton (2026-07-01) ← DONE
+1. ~~**`src/kestrel/agent/`**~~ — ✅ `ReActAgent` + bridge + metrics + CLI wired.
+2. ~~**Loop ReAct**~~ — ✅ `observe → think → act` con Anthropic SDK, tool_use nativo.
+3. ~~**Bridge MCP → Anthropic tools**~~ — ✅ registry → `[{type, name, description, input_schema}]`.
+4. ~~**CLI**~~ — ✅ `kestrel agent --machine <slug> --mode blind --provider anthropic --budget-tokens 200000`.
+5. ~~**HITL terminal**~~ — ✅ 4 gates: machine_pick, vector_confirm, submit_flag, debrief. `input()` en CLI.
+6. ~~**Métricas**~~ — ✅ `state_dir/runs/<slug>-<ts>.json`: tools_called, stuck_events, time-to-flag.
 
-1. **Loop ReAct** — Anthropic SDK directo: `observe → think → act → observe`. Estado entre iteraciones vía MCP state tools. Budget de tokens configurable.
-2. **Comando**: `kestrel agent --machine kobold --mode blind --provider anthropic`
-3. **HITL gates via `request_user_confirmation`** — el agente pausa solo en los 4 gates críticos (pick máquina, confirmar vector, submit flag, debrief). El resto corre solo.
-4. **Métricas por run**: tiempo-a-user-flag, tiempo-a-root-flag, `tools_called`, `stuck_events`, `vector_accuracy`. Guardadas en `state_dir/runs/`.
-5. **Criterio de done**: agente headless obtiene root en Kobold (Easy) sin intervención humana excepto los 4 gates.
+### S2 — Run real contra Kobold (Easy, retired) ← PENDIENTE
+1. **Levantar Kali + VPN** → spawn Kobold → `kestrel agent --machine kobold --mode blind`.
+2. **Criterio de done**: agente obtiene root sin intervención excepto los 4 gates.
+3. **Fix de issues reales** — loops infinitos, HITL timing, tool errors en caliente.
+4. **vector_accuracy post-run** — comparar vector elegido vs vector ganador.
 
 **Por qué es el diferenciador**: ninguna herramienta HTB pública hace esto. Pasa de "Claude con tools" a "agente de seguridad con benchmarks". Es lo que convierte el proyecto en investigación publicable.
 

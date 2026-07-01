@@ -22,10 +22,11 @@ def test_version_command(runner):
     assert "kestrel" in res.stdout
 
 
-def test_agent_command_stub(runner):
-    res = runner.invoke(app, ["agent"])
-    assert res.exit_code == 2
-    assert "v0.5" in res.stdout
+def test_agent_command_no_api_key(runner, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    res = runner.invoke(app, ["agent", "kobold"])
+    assert res.exit_code == 1
+    assert "ANTHROPIC_API_KEY" in res.output
 
 
 def test_config_init_creates_file(runner, tmp_path):

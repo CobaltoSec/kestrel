@@ -84,10 +84,53 @@ def mcp(
 
 
 @app.command()
-def agent() -> None:
-    """Public agent runner — DEFERRED to v0.5."""
-    typer.echo("Public agent runner not yet implemented. See v0.5 roadmap in CHANGELOG.md.")
-    raise typer.Exit(code=2)
+def agent(
+    machine: str = typer.Argument(..., help="Machine slug, e.g. 'kobold'"),
+    mode: str = typer.Option("blind", "--mode", "-m", help="Engagement mode: blind | guided"),
+    provider: str = typer.Option("anthropic", "--provider", help="LLM provider (only 'anthropic' supported)"),
+    model: str = typer.Option("claude-sonnet-5", "--model", help="Anthropic model ID"),
+    budget_tokens: int = typer.Option(200_000, "--budget-tokens", help="Max tokens before abort"),
+    max_iter: int = typer.Option(60, "--max-iter", help="Max ReAct iterations"),
+    state_dir: str = typer.Option(None, "--state-dir"),
+    session_root: str = typer.Option(None, "--session-root"),
+    verbose: bool = typer.Option(True, "--verbose/--quiet"),
+) -> None:
+    """Run the autonomous ReAct agent against a HTB machine."""
+    import os
+    from pathlib import Path
+    from kestrel.agent.loop import ReActAgent
+
+    if provider != "anthropic":
+        typer.echo(f"Provider '{provider}' not yet supported. Only 'anthropic' is available.")
+        raise typer.Exit(code=1)
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        typer.echo("Error: ANTHROPIC_API_KEY not set in environment.")
+        raise typer.Exit(code=1)
+
+    typer.echo(
+        f"[kestrel-agent] Starting {mode} engagement: machine={machine} "
+        f"model={model} budget={budget_tokens:,} tokens max_iter={max_iter}"
+    )
+
+    ag = ReActAgent(
+        machine=machine,
+        mode=mode,
+        provider=provider,
+        model=model,
+        budget_tokens=budget_tokens,
+        max_iterations=max_iter,
+        state_dir=Path(state_dir) if state_dir else None,
+        session_root=Path(session_root) if session_root else None,
+        api_key=api_key,
+        verbose=verbose,
+    )
+    metrics = ag.run()
+
+    typer.echo("\n[kestrel-agent] Run complete:")
+    import json
+    typer.echo(json.dumps(metrics.to_dict(), indent=2, default=str))
 
 
 @app.command()
