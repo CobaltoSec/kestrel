@@ -326,7 +326,11 @@ def query_kb(categories: list[dict]) -> list[dict]:
         return kb_results
 
     try:
-        sys.path.insert(0, kb_path)
+        kp = Path(kb_path)
+        # If kb_path is the kb/ package itself (has query/ subdir), insert parent
+        insert_path = str(kp.parent) if (kp / "query").is_dir() or (kp / "__init__.py").exists() else str(kp)
+        if insert_path not in sys.path:
+            sys.path.insert(0, insert_path)
         from kb.query.smart import smart_search
 
         for cat in high_conf:

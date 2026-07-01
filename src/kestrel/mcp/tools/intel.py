@@ -131,13 +131,26 @@ async def intel_classify_blind(
 
 
 def _try_import_kb_smart() -> Any | None:
-    """Try to import kb.query.smart from KESTREL_KB_PATH. Returns the module or None."""
+    """Try to import kb.query.smart from KESTREL_KB_PATH. Returns the module or None.
+
+    Handles two layouts:
+    - KESTREL_KB_PATH = /path/to/kb          (the package dir itself, has query/ subdir)
+      → insert parent so 'from kb.query import smart' resolves
+    - KESTREL_KB_PATH = /path/to/containing  (parent of kb/, has kb/ subdir)
+      → insert as-is
+    """
     kb_path = os.environ.get("KESTREL_KB_PATH", "")
     if not kb_path:
         return None
+    kp = Path(kb_path)
+    # If kb_path looks like the kb/ package itself (has query/ or __init__.py), use parent
+    if (kp / "query").is_dir() or (kp / "__init__.py").exists():
+        insert_path = str(kp.parent)
+    else:
+        insert_path = str(kp)
     try:
-        if kb_path not in sys.path:
-            sys.path.insert(0, kb_path)
+        if insert_path not in sys.path:
+            sys.path.insert(0, insert_path)
         from kb.query import smart  # type: ignore
         return smart
     except Exception:

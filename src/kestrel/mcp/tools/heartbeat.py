@@ -45,6 +45,8 @@ async def stuck_check(machine: str) -> dict[str, Any]:
             signals.append("cred_exhausted")
         if core_stuck.detect_progress_stalled(estado_path, findings_path, jsonl_path, now):
             signals.append("progress_stalled")
+        if core_stuck.detect_rabbit_hole(estado, jsonl):
+            signals.append("rabbit_hole")
 
         recommendation, alternatives, rationale = core_stuck.recommend(signals, findings, session_dir)
         return {

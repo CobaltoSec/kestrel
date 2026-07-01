@@ -197,6 +197,29 @@ def test_stuck_check_shell_lost_signal(fresh_ctx):
     assert result["recommendation"] == "reset_listener"
 
 
+def test_stuck_check_rabbit_hole_signal(fresh_ctx):
+    """V09-D2: stuck_check must include rabbit_hole detection (was missing)."""
+    import json
+    from datetime import datetime, timezone
+    session_dir = Path(fresh_ctx.session_root) / "htb-test-lame"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    repeated_event = {
+        "ts": now.isoformat(),
+        "event": "narrate",
+        "stream": "🔍",
+        "detail": "gobuster no encuentra nada interesante en /api",
+    }
+    jsonl_lines = [repeated_event] * 4
+    (session_dir / "sessions.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in jsonl_lines) + "\n", encoding="utf-8"
+    )
+    (session_dir / "estado.md").write_text("probando dirfuzz varias veces", encoding="utf-8")
+    result = asyncio.run(hb_tools.stuck_check(machine="lame"))
+    assert "rabbit_hole" in result["signals"]
+    assert result["recommendation"] == "switch_vector"
+
+
 def test_heartbeat_status_returns_dashboard_shape(fresh_ctx):
     session_dir = Path(fresh_ctx.session_root) / "htb-test-lame"
     session_dir.mkdir(parents=True, exist_ok=True)

@@ -135,6 +135,26 @@ def test_kb_query_handles_smart_exception(fresh_ctx, monkeypatch):
     assert "error" in result["reason"]
 
 
+def test_kb_path_auto_detects_package_directory(tmp_path, monkeypatch):
+    """V09-D3: _try_import_kb_smart resolves parent when KESTREL_KB_PATH is the kb/ package itself."""
+    # Create a minimal kb/query/smart.py under tmp_path/kb/
+    kb_dir = tmp_path / "kb"
+    query_dir = kb_dir / "query"
+    query_dir.mkdir(parents=True)
+    (kb_dir / "__init__.py").write_text("")
+    (query_dir / "__init__.py").write_text("")
+    (query_dir / "smart.py").write_text(
+        "def smart_search(query, top_k=5): return ([], {})\n"
+    )
+
+    # Point KESTREL_KB_PATH to the kb/ dir itself (the package dir)
+    monkeypatch.setenv("KESTREL_KB_PATH", str(kb_dir))
+    mod = intel_tools._try_import_kb_smart()
+    assert mod is not None, "Should resolve the module even when KB_PATH points to the package dir"
+    results, _ = mod.smart_search("test", top_k=3)
+    assert results == []
+
+
 # ── intel_cve_lookup (mocked stages) ────────────────────────────────────────
 
 

@@ -81,8 +81,9 @@ El modelo DEBE llamar estas tools en orden. Sin lifecycle no hay resume posible.
 - **HITL solo gates críticos** (~3-4 por máquina): machine pick, vector confirm, submit_flag, debrief. Para eso `call_tool('request_user_confirmation', {...})` y esperá la respuesta de Nico.
 - **Anti-spoiler en intel.md**: dirección no comandos. Mencionar CVE/técnica OK, copy-paste payload NO.
 - **Persistir progreso**: después de cada hito (target_ip, vector elegido, session abierta, flag extraída), `call_tool('state_write_machine', {...})`.
-- **Stuck handling**: si una acción no avanza en 30 min o falla repetido → `call_tool('stuck_check', {machine: ...})` y aplicar la recomendación. Si `rabbit_hole: true` → pivotar de vector inmediatamente.
-- **intel_next_step loop**: llamar `intel_next_step` después de cada 3 tools consecutivos sin progreso, no solo al inicio.
+- **Stuck handling**: si 3 tools consecutivos sin nuevos findings → `call_tool('stuck_check', {machine: ...})` y aplicar la recomendación inmediatamente. Si `recommendation: switch_vector` o `rabbit_hole: true` en signals → pivotar de vector sin intentar el mismo camino de nuevo.
+- **intel_next_step loop**: llamar `intel_next_step` después de cada 3 tools consecutivos sin progreso (no solo al inicio). Si los steps devueltos ya fueron probados (están en `tried`), escalar a `stuck_check`.
+- **lolbin_suggest**: después de `post_enum_system` en p4_privesc, extraer la lista de binarios SUID/sudo del output y llamar `lolbin_suggest({binaries: [...], context: "SUID"/"sudo nopasswd", os_hint: "linux"/"windows"})`. No saltear este paso — puede revelar GTFOBins paths que linpeas no lista explícitamente.
 
 ## Phases (referencia rápida)
 

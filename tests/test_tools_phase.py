@@ -130,3 +130,29 @@ def test_phase_enter_without_machine_still_works(fresh_ctx):
     result = asyncio.run(phase_tools.phase_enter(phase="p3_exploit"))
     assert result["phase"] == "p3_exploit"
     assert "error" not in result
+
+
+# ── V09: Intelligence Loop phase guidance ────────────────────────────────────
+
+
+def test_phase_p1_includes_stuck_check(fresh_ctx):
+    """V09-D2: stuck_check wired into p1_recon suggested_tools."""
+    result = asyncio.run(phase_tools.phase_enter(phase="p1_recon"))
+    assert "stuck_check" in result["suggested_tools"]
+
+
+def test_phase_p2_includes_stuck_check_and_intel_next_step(fresh_ctx):
+    """V09-D2: stuck_check and intel_next_step in p2_vector."""
+    result = asyncio.run(phase_tools.phase_enter(phase="p2_vector"))
+    assert "stuck_check" in result["suggested_tools"]
+    assert "intel_next_step" in result["suggested_tools"]
+
+
+def test_phase_p4_includes_lolbin_suggest_and_stuck_check(fresh_ctx):
+    """V09-D4: lolbin_suggest wired into p4_privesc after post_enum_system."""
+    result = asyncio.run(phase_tools.phase_enter(phase="p4_privesc"))
+    tools = result["suggested_tools"]
+    assert "lolbin_suggest" in tools
+    assert "stuck_check" in tools
+    # lolbin_suggest should come after post_enum_system in the list
+    assert tools.index("lolbin_suggest") > tools.index("post_enum_system")
