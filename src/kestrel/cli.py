@@ -88,7 +88,7 @@ def agent(
     machine: str = typer.Argument(..., help="Machine slug, e.g. 'kobold'"),
     mode: str = typer.Option("blind", "--mode", "-m", help="Engagement mode: blind | guided"),
     provider: str = typer.Option("anthropic", "--provider", help="LLM provider (only 'anthropic' supported)"),
-    model: str = typer.Option("claude-sonnet-5", "--model", help="Anthropic model ID"),
+    model: str = typer.Option("claude-sonnet-4-5", "--model", help="Anthropic model ID"),
     budget_tokens: int = typer.Option(200_000, "--budget-tokens", help="Max tokens before abort"),
     max_iter: int = typer.Option(60, "--max-iter", help="Max ReAct iterations"),
     state_dir: str = typer.Option(None, "--state-dir"),

@@ -25,7 +25,7 @@ from kestrel.agent.metrics import RunMetrics
 
 
 # Anthropic model for the agent (latest Sonnet by default)
-DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MODEL = "claude-sonnet-4-5"
 
 # Hard limits
 DEFAULT_BUDGET_TOKENS = 200_000

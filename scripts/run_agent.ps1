@@ -11,7 +11,7 @@ param(
     [string]$Machine,
 
     [string]$Mode        = "blind",
-    [string]$Model       = "claude-sonnet-5",
+    [string]$Model       = "claude-sonnet-4-5",
     [int]   $BudgetTokens = 500000,
     [int]   $MaxIter      = 80
 )
