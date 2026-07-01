@@ -33,17 +33,18 @@
 
 ---
 
-## RT-KESTREL-V08 — State & Session Continuity (2-3h) ← PRÓXIMO
+## RT-KESTREL-V08 — State & Session Continuity ← CERRADO 2026-07-01 (partial)
 
 **Objetivo:** Resume real entre sesiones. Estado persistente entre turnos de Claude.
 
-1. **Fix session_slug** — `session_open` debe escribir el slug generado de vuelta a `MachineState.session_slug` via `state_write_machine`. Actualmente el slug se genera pero nunca persiste.
-2. **current_session auto-update** — cuando se hace spawn de nueva máquina, actualizar `LastCycle.current_session`. Actualmente permanece apuntando a la última sesión que escribió este campo.
-3. **Attack plan persistence** — después de `intel_classify_blind`, escribir `attack_plan` y `current_vector` a state. Actualmente se pierden entre turnos de Claude.
-4. **Progress tracking** — `phase_enter` debe escribir a `MachineState.progress[phase]` + `last_phase_completed`. El state audit mostró que estos campos son siempre vacíos.
-5. **htb_cli.py** — crear wrapper CLI sobre `sectors/red-team/htb/api.py` con subcomandos `list`, `spawn`, `active`, `release`, `submit`, `profile`. O alternativamente eliminar todas las referencias en la skill (los MCP tools ya hacen esto).
+1. ~~**Fix session_slug**~~ — ✅ DONE. `_resolve_session_dir` persiste slug via `update_machine`. Commit `5896279`.
+2. ~~**current_session auto-update**~~ — ✅ DONE. `set_current_session()` en StateStore; `htb_spawn` lo llama. Commit `5896279`.
+3. ~~**Attack plan persistence**~~ — ✅ DONE. `intel_classify_blind(machine=...)` persiste `attack_plan` + `current_vector`. Commit `5896279`.
+4. ~~**Progress tracking**~~ — ✅ DONE. `phase_enter(machine=...)` escribe `progress[phase]` + `last_phase_completed` + lifecycle event. Commit `5896279`.
+5. **htb_cli.py** — ⏸ DEFERRED → cut; los MCP tools cubren todas las funciones del CLI planificado.
+6. **E2E own** — ⏸ DEFERRED. Lifecycle protocol confirmado ✅; Reactor (10.129.41.238) no owned — vector SSH no encontrado con 232 combinaciones, web estática sin API. Diferido a próxima sesión con máquina distinta.
 
-**Deliverable:** `kestrel resume` retoma una sesión exactamente donde la dejó — sin tener que re-explorar.
+**Estado:** D1-D4 done (441 tests ✅), D5 cut, D6 deferred.
 
 ---
 

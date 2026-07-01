@@ -8,6 +8,17 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-V08] — 2026-07-01
+
+- `state/store.py`: nuevo método `set_current_session(slug)` — actualiza `LastCycle.data.current_session` con filelock
+- `mcp/tools/state.py`: `_resolve_session_dir` persiste slug generado a `MachineState.session_slug` via `update_machine`; slug es estable entre calls
+- `mcp/tools/htb.py`: `htb_spawn` genera session_slug y llama `set_current_session` — `current_session` siempre apunta a la máquina activa tras spawn
+- `mcp/tools/intel.py`: `intel_classify_blind` acepta param opcional `machine`; persiste `attack_plan` + `current_vector` a state
+- `mcp/tools/phase.py`: `phase_enter` acepta param opcional `machine`; escribe `progress[phase]` + `last_phase_completed` + emite lifecycle event a `sessions.jsonl`
+- `state/schema.py`: `AttackPlan.primary_chain` cambiado a `Any` — build_attack_plan retorna dict, no list[str]
+- 9 tests nuevos (state, htb, intel, phase) → 441 total (de 432)
+- E2E parcial contra Reactor: lifecycle protocol confirmado (spawn → phase_enter → session_slug persistido ✅); own de máquina diferido
+
 ## [RT-KESTREL-FIX-V01] — 2026-07-01
 
 - `skill/SKILL.md`: lifecycle protocol obligatorio documentado — `session_open` → `phase_enter` → `session_close` con tabla de qué persiste cada call; Kali gate como primer paso (HARD STOP si `reachable: false`)
