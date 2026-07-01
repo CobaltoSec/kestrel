@@ -19,16 +19,15 @@
 
 1. ~~**Env vars en MCP config**~~ — ✅ DONE 2026-07-01. `KESTREL_KALI_HOST=192.168.179.137`, `KALI_USER=kali`, `KALI_KEY=~/.ssh/kali-pentest`, `HTB_API_TOKEN`, `HTB_USER_ID=3460182`, `KESTREL_KB_PATH`. Reiniciar Claude Code para que tome efecto.
 
-2. **Completar Fase 13 (cutover)** — mover `skill/phases/` → `docs/v04-phases-archive/`. El SKILL.md thin de 105 líneas ya existe — era el thin wrapper que nunca terminó de desplegarse porque las phases seguían ahí.
+2. ~~**Completar Fase 13 (cutover)**~~ — ✅ DONE 2026-07-01. `skill/phases/` movido a `docs/v04-phases-archive/`. Commit `e06bcdf`.
 
-3. **Lifecycle protocol en SKILL.md** — agregar instrucciones explícitas:
-   - Al iniciar: llamar `session_open` ANTES de cualquier tool → registra `session_slug` en state
-   - Al cambiar fase: llamar `phase_enter` → gate HITL si corresponde
-   - Al terminar: llamar `session_close` → escribe `finished_at`, actualiza `current_session`
+3. ~~**Lifecycle protocol en SKILL.md**~~ — ✅ DONE 2026-07-01. `session_open` → `phase_enter` → `session_close` documentados como obligatorios. Commit `e06bcdf`.
 
-4. **Gate Kali up** — `kali_vm_up` debe ser el primer tool de cualquier sesión (boot + wait SSH automático). HARD STOP si `reachable: false`. `kali_vm_status` para check rápido sin boot.
+4. ~~**Gate Kali up en SKILL.md**~~ — ✅ DONE 2026-07-01. `kali_vm_status` + `kali_vm_up` como primer step, HARD STOP si `reachable: false`. Commit `e06bcdf`.
 
-5. **E2E** — correr contra cualquier Easy Machine activa. Verificar: `session_slug` escrito, `sessions.jsonl` tiene eventos de lifecycle, resume funciona en segunda sesión.
+5. ~~**Fix path MCP server**~~ — ✅ DONE 2026-07-01. `~/.claude.json` actualizado: `C:\opsec\runner\` → `C:\Proyectos\Kestrel\`. Requiere restart Claude Code para tomar efecto.
+
+6. **E2E** — correr contra cualquier Easy Machine activa. Verificar: `session_slug` escrito, `sessions.jsonl` tiene eventos de lifecycle, resume funciona en segunda sesión. **PENDIENTE: reiniciar Claude Code primero.**
 
 **Deliverable:** Kestrel corre una máquina Easy sin intervención manual fuera de los 4 gates HITL previstos.
 
