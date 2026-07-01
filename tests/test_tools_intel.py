@@ -942,3 +942,42 @@ def test_cve_lookup_auto_nuclei_fires_on_high_priority(fresh_ctx, monkeypatch):
     assert result["nuclei_auto_run"] is True, f"Expected nuclei_auto_run=True, got {result}"
     assert len(nuclei_called_with) == 1, f"Expected 1 nuclei call, got {nuclei_called_with}"
     assert "CVE-2025-29927" in nuclei_called_with[0]["templates"]
+
+
+# ── V08: attack_plan persistence ────────────────────────────────────────────
+
+
+def test_classify_blind_persists_attack_plan_when_machine_provided(fresh_ctx):
+    """V08: intel_classify_blind persists attack_plan + current_vector when machine= given."""
+    asyncio.run(
+        intel_tools.intel_classify_blind(
+            target="10.10.10.3",
+            ports=["139", "445"],
+            services=["netbios-ssn", "microsoft-ds"],
+            banners=["Samba 3.0.20-Debian"],
+            os_hint="Linux",
+            machine="lame",
+        )
+    )
+    m = fresh_ctx.state_store.get_machine("lame")
+    assert m is not None
+    assert m.attack_plan is not None
+    assert m.attack_plan.primary_chain is not None
+    assert m.current_vector is not None
+    assert m.current_vector.id is not None
+    assert m.current_vector.budget_min == 30
+
+
+def test_classify_blind_no_machine_does_not_touch_state(fresh_ctx):
+    """V08: without machine param, state is unchanged."""
+    asyncio.run(
+        intel_tools.intel_classify_blind(
+            target="10.10.10.3",
+            ports=["80"],
+            services=["http"],
+        )
+    )
+    m = fresh_ctx.state_store.get_machine("lame")
+    # machine "lame" was pre-created in fresh_ctx, attack_plan should still be None
+    assert m is not None
+    assert m.attack_plan is None

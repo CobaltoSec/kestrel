@@ -48,7 +48,8 @@ _JACCARD_THRESHOLD = 0.6
     name="intel_classify_blind",
     description=(
         "Classify a target from ports/services/banners into ranked attack categories + attack plan. "
-        "Uses kestrel.core.fingerprint. KB query auto-runs if KESTREL_KB_PATH is set."
+        "Uses kestrel.core.fingerprint. KB query auto-runs if KESTREL_KB_PATH is set. "
+        "If machine is provided, persists attack_plan and current_vector to state."
     ),
     category="intel",
     input_schema={
@@ -61,6 +62,10 @@ _JACCARD_THRESHOLD = 0.6
             "os_hint": {"type": "string", "default": ""},
             "framework": {"type": "string"},
             "ad_joined": {"type": "boolean", "default": False},
+            "machine": {
+                "type": "string",
+                "description": "Machine slug — if provided, persists attack_plan + current_vector to state.",
+            },
         },
         "required": ["target"],
     },
@@ -73,6 +78,7 @@ async def intel_classify_blind(
     os_hint: str = "",
     framework: str | None = None,
     ad_joined: bool = False,
+    machine: str | None = None,
 ) -> dict[str, Any]:
     ports = ports or []
     services = services or []
@@ -89,6 +95,26 @@ async def intel_classify_blind(
         kb_chunks = []
     except Exception:
         kb_chunks = []
+
+    # V08: persist attack_plan + current_vector to machine state when machine provided
+    if machine:
+        try:
+            from datetime import datetime, timezone
+            ctx = mcp_context.get_context()
+            primary = attack_plan.get("primary_chain") if isinstance(attack_plan, dict) else None
+            primary_cats = primary.get("categories", []) if isinstance(primary, dict) else []
+            vector_id = primary_cats[0] if primary_cats else "classify_blind"
+            ctx.state_store.update_machine(machine, {
+                "attack_plan": attack_plan,
+                "current_vector": {
+                    "id": vector_id,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "budget_min": 30,
+                },
+            })
+        except Exception:
+            pass
+
     return {
         "target": target,
         "categories": categories,

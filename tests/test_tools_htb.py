@@ -107,6 +107,34 @@ def test_htb_spawn_machine_not_found(fresh_ctx, mock_client):
     assert result["error"] == "machine_not_found"
 
 
+def test_htb_spawn_persists_session_slug(fresh_ctx, mock_client):
+    """V08: htb_spawn persists session_slug to machine state."""
+    mock_client.get_machine.return_value = {
+        "id": 5, "name": "Reactor", "os": "Linux", "difficultyText": "Easy",
+        "ip": "10.129.41.238", "retired": False,
+    }
+    mock_client.spawn_machine.return_value = {"message": "Playing machine."}
+    result = asyncio.run(htb_tools.htb_spawn(slug="reactor"))
+    assert "session_slug" in result
+    m = fresh_ctx.state_store.get_machine("reactor")
+    assert m is not None
+    assert m.session_slug is not None
+    assert "reactor" in m.session_slug
+
+
+def test_htb_spawn_updates_current_session(fresh_ctx, mock_client):
+    """V08: htb_spawn updates state.current_session to the new machine's slug."""
+    mock_client.get_machine.return_value = {
+        "id": 5, "name": "Reactor", "os": "Linux", "difficultyText": "Easy",
+        "ip": "10.129.41.238", "retired": False,
+    }
+    mock_client.spawn_machine.return_value = {"message": "Playing machine."}
+    asyncio.run(htb_tools.htb_spawn(slug="reactor"))
+    state = fresh_ctx.state_store.read()
+    assert state.data.current_session is not None
+    assert "reactor" in state.data.current_session
+
+
 # ── htb_release ─────────────────────────────────────────────────────────────
 
 

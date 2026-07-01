@@ -101,12 +101,16 @@ class TriedHash(BaseModel):
 
 
 class AttackPlan(BaseModel):
-    """Copy of blind_fingerprint.py attack_plan output."""
+    """Copy of blind_fingerprint.py attack_plan output.
+
+    primary_chain / alternative_chains are dicts from build_attack_plan:
+    {"categories": [...], "confidence": float, "rationale": str}
+    """
 
     model_config = ConfigDict(extra="allow")
 
-    primary_chain: list[str] = Field(default_factory=list)
-    alternative_chains: list[list[str]] = Field(default_factory=list)
+    primary_chain: Any = None  # dict: {categories, confidence, rationale}
+    alternative_chains: list[Any] = Field(default_factory=list)
     parallel_tracks: list[str] = Field(default_factory=list)
     execution_hint: str | None = None
 

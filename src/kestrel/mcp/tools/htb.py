@@ -136,10 +136,15 @@ async def htb_spawn(slug: str) -> dict[str, Any]:
                 "target_ip": info.get("ip"),
             },
         )
+        # V08: generate + persist session_slug, update current_session
+        from kestrel.mcp.tools.state import _resolve_session_dir  # local to avoid circular
+        session_dir = _resolve_session_dir(slug)
+        ctx.state_store.set_current_session(session_dir.name)
         return {
             "slug": slug,
             "machine_id": mid,
             "target_ip": info.get("ip"),
+            "session_slug": session_dir.name,
             "message": result.get("message", "spawned"),
         }
     except Exception as exc:

@@ -158,6 +158,13 @@ class StateStore:
                 state.data.current_session = session_slug
             self._write_unlocked(state)
 
+    def set_current_session(self, session_slug: str) -> None:
+        """Set data.current_session to the given slug."""
+        with self._lock():
+            state = self.read()
+            state.data.current_session = session_slug
+            self._write_unlocked(state)
+
     def clear_current_session(self) -> None:
         """Clear current_session (called at end of p6/p5-close)."""
         with self._lock():

@@ -94,3 +94,39 @@ def test_phase_enter_all_six_valid_phases(fresh_ctx):
         assert "error" not in result, f"{phase} failed: {result}"
         assert result["phase"] == phase
         assert len(result["suggested_tools"]) > 0
+
+
+# ── V08: progress tracking ──────────────────────────────────────────────────
+
+
+def test_phase_enter_with_machine_writes_progress(fresh_ctx):
+    """V08: phase_enter writes progress[phase] + last_phase_completed to machine state."""
+    asyncio.run(state_tools.state_write_machine(
+        machine="reactor", patch={"machine_id": 5, "session_slug": "htb-test-reactor"}
+    ))
+    asyncio.run(phase_tools.phase_enter(phase="p1_recon", machine="reactor"))
+    m = fresh_ctx.state_store.get_machine("reactor")
+    assert m is not None
+    assert "p1_recon" in m.progress
+    assert m.last_phase_completed == "p1_recon"
+
+
+def test_phase_enter_with_machine_emits_lifecycle_event(fresh_ctx):
+    """V08: phase_enter appends a phase_enter event to sessions.jsonl."""
+    import json
+    asyncio.run(state_tools.state_write_machine(
+        machine="reactor", patch={"machine_id": 5, "session_slug": "htb-test-reactor"}
+    ))
+    asyncio.run(phase_tools.phase_enter(phase="p2_vector", machine="reactor"))
+    session_dir = fresh_ctx.session_root / "htb-test-reactor"
+    jsonl = session_dir / "sessions.jsonl"
+    assert jsonl.exists()
+    events = [json.loads(ln) for ln in jsonl.read_text().splitlines() if ln.strip()]
+    assert any(e.get("event") == "phase_enter" and e.get("phase") == "p2_vector" for e in events)
+
+
+def test_phase_enter_without_machine_still_works(fresh_ctx):
+    """V08: omitting machine param behaves like before (no regression)."""
+    result = asyncio.run(phase_tools.phase_enter(phase="p3_exploit"))
+    assert result["phase"] == "p3_exploit"
+    assert "error" not in result

@@ -183,3 +183,22 @@ def test_state_write_machine_valid_name_with_dash(fresh_ctx):
     )
     assert "error" not in result
     assert result["machine"] == "my-machine"
+
+
+# ── V08: session_slug persistence ───────────────────────────────────────────
+
+
+def test_resolve_session_dir_persists_generated_slug(fresh_ctx):
+    """_resolve_session_dir auto-persists the generated slug to machine state."""
+    asyncio.run(state_tools.state_session_dir(machine="lame"))
+    m = fresh_ctx.state_store.get_machine("lame")
+    assert m is not None
+    assert m.session_slug is not None
+    assert "lame" in m.session_slug
+
+
+def test_resolve_session_dir_stable_across_calls(fresh_ctx):
+    """Second call returns same slug (reads from persisted state)."""
+    r1 = asyncio.run(state_tools.state_session_dir(machine="lame"))
+    r2 = asyncio.run(state_tools.state_session_dir(machine="lame"))
+    assert r1["session_dir"] == r2["session_dir"]

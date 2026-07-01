@@ -208,9 +208,10 @@ def test_real_last_cycle_roundtrip(tmp_path: Path):
 
 def test_attack_plan_persists(tmp_path: Path):
     store = StateStore(tmp_path / "state.json")
+    # primary_chain is a dict matching build_attack_plan output, not a list[str]
     plan = AttackPlan(
-        primary_chain=["cve-X", "winrm"],
-        alternative_chains=[["lfi", "cred-reuse"]],
+        primary_chain={"categories": ["smb-exploit"], "confidence": 0.8, "rationale": "SMB port"},
+        alternative_chains=[{"categories": ["web-exploit"], "confidence": 0.4, "rationale": "alt"}],
         parallel_tracks=["docker-escape"],
         execution_hint="multi-path",
     )
@@ -218,7 +219,8 @@ def test_attack_plan_persists(tmp_path: Path):
     m = store.get_machine("m4")
     assert m is not None
     assert m.attack_plan is not None
-    assert m.attack_plan.primary_chain == ["cve-X", "winrm"]
+    assert m.attack_plan.primary_chain == {"categories": ["smb-exploit"], "confidence": 0.8, "rationale": "SMB port"}
+    assert m.attack_plan.execution_hint == "multi-path"
 
 
 def test_current_vector_with_budget(tmp_path: Path):

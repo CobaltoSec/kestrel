@@ -7,6 +7,7 @@ text lives in kestrel.mcp.prompts (Fase 7).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from kestrel.mcp import context as mcp_context
@@ -126,11 +127,23 @@ async def phase_current() -> dict[str, Any]:
     name="phase_enter",
     description=(
         "Enter a phase (p0_setup, p1_recon, p2_vector, p3_exploit, p4_privesc, p5_close). "
-        "Persists state.current_phase and returns the phase guidance (description, suggested tools, HITL gates)."
+        "Persists state.current_phase and returns the phase guidance (description, suggested tools, HITL gates). "
+        "If machine is provided, also writes progress[phase] + last_phase_completed and emits a lifecycle event."
     ),
     category="phase",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "phase": {"type": "string", "enum": list(("p0_setup", "p1_recon", "p2_vector", "p3_exploit", "p4_privesc", "p5_close"))},
+            "machine": {
+                "type": "string",
+                "description": "Machine slug — if provided, tracks phase progress in machine state and emits a lifecycle event.",
+            },
+        },
+        "required": ["phase"],
+    },
 )
-async def phase_enter(phase: str) -> dict[str, Any]:
+async def phase_enter(phase: str, machine: str | None = None) -> dict[str, Any]:
     if phase not in VALID_PHASES:
         return {
             "error": "invalid_phase",
@@ -139,6 +152,23 @@ async def phase_enter(phase: str) -> dict[str, Any]:
         }
     ctx = mcp_context.get_context()
     ctx.state_store.set_current_phase(phase)
+
+    # V08: write progress to machine state + emit lifecycle event
+    if machine:
+        try:
+            m = ctx.state_store.get_machine(machine)
+            progress = dict(m.progress) if m and m.progress else {}
+            progress[phase] = datetime.now(timezone.utc).isoformat()
+            ctx.state_store.update_machine(machine, {
+                "progress": progress,
+                "last_phase_completed": phase,
+            })
+            from kestrel.mcp.tools.state import _resolve_session_dir
+            session_dir = _resolve_session_dir(machine)
+            ctx.state_store.append_session_event(session_dir, phase=phase, event="phase_enter")
+        except Exception:
+            pass
+
     guidance = PHASE_GUIDANCE[phase]
     return {
         "phase": phase,

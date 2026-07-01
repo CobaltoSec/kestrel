@@ -38,6 +38,7 @@ def _resolve_session_dir(machine: str | None = None) -> Path:
     if m and m.session_slug:
         return ctx.session_root / m.session_slug
     slug = f"htb-{datetime.now().strftime('%Y-%m-%d')}-{machine}"
+    ctx.state_store.update_machine(machine, {"session_slug": slug})
     return ctx.session_root / slug
 
 
