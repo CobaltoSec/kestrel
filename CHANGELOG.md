@@ -8,6 +8,26 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-V10b-S1] — 2026-07-01
+
+- `agent/__init__.py`: paquete `kestrel.agent` creado — exporta `ReActAgent`
+- `agent/bridge.py`: `load_tools_for_anthropic()` — convierte todos los MCP tools registrados a formato Anthropic `tool_use`; excluye `request_user_confirmation` (HITL maneja en loop nativo)
+- `agent/metrics.py`: `RunMetrics` dataclass — KPIs por run: `tools_called`, `stuck_events`, `hitl_gates`, `time_to_user_flag_min`, `time_to_root_flag_min`, `vector_chosen`, `outcome`; persiste en `state_dir/runs/<slug>-<ts>.json`
+- `agent/loop.py`: `ReActAgent` — loop `observe → think → act` vía Anthropic SDK `tool_use`; HITL terminal via `input()`; stuck injection automático cada 3 iteraciones sin progreso; budget + max_iter guards; flag timing automático
+- `cli.py`: `kestrel agent <machine>` expandido — `--mode`, `--provider`, `--model`, `--budget-tokens`, `--max-iter`; valida `ANTHROPIC_API_KEY` antes de arrancar
+- `pyproject.toml`: `[agent]` extras group — `anthropic>=0.115`
+- 12 tests nuevos (`test_agent.py`) → 458 total
+
+## [RT-KESTREL-V09] — 2026-07-01
+
+- `mcp/tools/heartbeat.py`: `stuck_check` agregó `detect_rabbit_hole` — bug donde el signal más común en boxes web-only nunca aparecía en la respuesta del tool
+- `mcp/tools/phase.py`: `stuck_check` wired en `p1_recon`, `p2_vector`, `p4_privesc`; `intel_next_step` agregado a `p2_vector`; `lolbin_suggest` agregado a `p4_privesc` (después de `post_enum_system`)
+- `mcp/tools/intel.py`: `_try_import_kb_smart` — path auto-detection: si `KESTREL_KB_PATH` apunta al package `kb/` mismo, inserta el parent en `sys.path` automáticamente (fix para `KESTREL_KB_PATH = .../red-team/kb`)
+- `core/fingerprint.py`: mismo fix de path en `query_kb`
+- `pyproject.toml`: `[kb]` extras ampliados — `requests>=2.31`, `python-dotenv>=1.0`, `PyYAML>=6.0`
+- `skill/SKILL.md`: stuck rule actualizada ("3 tools consecutivos sin nuevos findings" vs "30 min"); instrucción `lolbin_suggest` post `post_enum_system`
+- 5 tests nuevos (rabbit_hole en stuck_check, KB path resolution, phase guidance V09) → 446 total
+
 ## [RT-KESTREL-V08] — 2026-07-01
 
 - `state/store.py`: nuevo método `set_current_session(slug)` — actualiza `LastCycle.data.current_session` con filelock
