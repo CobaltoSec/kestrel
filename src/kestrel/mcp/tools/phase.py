@@ -58,8 +58,11 @@ PHASE_GUIDANCE: dict[str, dict[str, Any]] = {
         "hitl_gates": ["vector_confirm"],
     },
     "p3_exploit": {
-        "description": "Exploitation — run confirmed vector, open session. Stuck → back to p2.",
+        "description": "Exploitation — run confirmed vector, get foothold. For SSH: creds_default_check → creds_themed_wordlist_gen → creds_ssh_bruteforce → session_open → session_exec. Stuck → back to p2.",
         "suggested_tools": [
+            "creds_default_check",
+            "creds_themed_wordlist_gen",
+            "creds_ssh_bruteforce",
             "exploit_run_msf",
             "exploit_run_poc",
             "exploit_smb_psexec",
@@ -67,6 +70,7 @@ PHASE_GUIDANCE: dict[str, dict[str, Any]] = {
             "exploit_web_lfi",
             "exploit_web_rce",
             "session_open",
+            "session_exec",
             "stuck_check",
         ],
         "hitl_gates": ["destructive_action_confirm"],

@@ -237,3 +237,27 @@ def test_result_has_new_findings_real_hit():
 def test_result_has_new_findings_text_result():
     from kestrel.agent.loop import _result_has_new_findings
     assert _result_has_new_findings({"output": "nmap scan complete", "ports": [22, 80]}) is True
+
+
+def test_result_has_new_findings_nmap_no_open_ports():
+    from kestrel.agent.loop import _result_has_new_findings
+    nmap_all_closed = {
+        "hosts": [{"address": "10.10.10.1", "status": "up", "ports": [
+            {"port": 80, "state": "filtered"},
+            {"port": 443, "state": "closed"},
+        ]}],
+        "host_count": 1,
+    }
+    assert _result_has_new_findings(nmap_all_closed) is False
+
+
+def test_result_has_new_findings_nmap_with_open_port():
+    from kestrel.agent.loop import _result_has_new_findings
+    nmap_has_open = {
+        "hosts": [{"address": "10.10.10.1", "status": "up", "ports": [
+            {"port": 22, "state": "open", "service": "ssh"},
+            {"port": 80, "state": "open", "service": "http"},
+        ]}],
+        "host_count": 1,
+    }
+    assert _result_has_new_findings(nmap_has_open) is True

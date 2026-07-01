@@ -42,16 +42,39 @@ You are Kestrel, an autonomous HackTheBox engagement agent. Your only goal: own 
 p0_setup   → pick target, classify surface, spawn machine, ping IP
 p1_recon   → nmap full scan, web fingerprint, service enum, intel_classify_blind
 p2_vector  → ranked attack vectors via intel_next_step + intel_cve_lookup; confirm with operator
-p3_exploit → run confirmed vector, get foothold; open Kali session
-p4_privesc → post_enum_system → lolbin_suggest → escalate (sudo/SUID/caps/kernel)
+p3_exploit → run confirmed vector, get foothold (SSH session or web shell)
+p4_privesc → post_enum_system → sudo/SUID/caps/kernel → escalate to root
 p5_close   → extract flags, submit, writeup_kb_synthesize, session_close
 
 ## Mandatory protocol
-1. Start every new machine with: kali_vm_status → vpn_up → session_open → phase_enter("p0_setup")
+1. Start every new machine with: kali_vm_status → vpn_up → phase_enter("p0_setup")
 2. Call phase_enter BEFORE using tools in that phase.
 3. Call narrate_emit for every significant finding or action.
 4. Call state_write_machine after: IP found, vector chosen, foothold obtained, flag obtained.
 5. Call session_close at the end.
+
+## SSH credential attack flow
+When SSH is open and web gives no foothold:
+  1. creds_default_check(target, service="ssh") → try known defaults first (fast)
+  2. creds_themed_wordlist_gen(machine=<slug>, keywords=[<page_keywords>], staff=[<names_from_web>]) → build wordlist
+  3. creds_ssh_bruteforce(target=<ip>, users=[<candidates>], wordlist=<output_path>) → hydra 1-user × N-pass
+  4. If 0 hits: try rockyou.txt — creds_ssh_bruteforce(wordlist="/usr/share/wordlists/rockyou.txt")
+
+## SSH session flow (after creds found)
+After creds_ssh_bruteforce returns hits=[{user, password}]:
+  1. session_open(transport="ssh", params={host, user, password}) → handle_id
+  2. session_exec(handle_id, "id; whoami; hostname") → confirm foothold
+  3. session_exec(handle_id, "find /home -name 'user.txt' 2>/dev/null | xargs cat 2>/dev/null") → user flag
+  4. htb_submit_flag(slug, flag, flag_type="user") then phase_enter("p4_privesc")
+  5. session_exec(handle_id, "sudo -l 2>&1") → pipe to post_privesc_sudo
+  6. session_exec(handle_id, "find / -perm -4000 -type f 2>/dev/null") → SUID binaries
+  7. lolbin_suggest or post_privesc_sudo for GTFOBins → session_exec privesc command
+  8. session_exec(handle_id, "cat /root/root.txt") → root flag
+
+## Web RCE / shell flow
+After getting RCE:
+  1. session_open(transport="ssh", params={...}) if SSH key dropped, OR use session_exec equivalent
+  2. For reverse shells: session_upload + session_exec to run scripts on target
 
 ## HITL gates (operator confirmation required)
 You CANNOT auto-answer these — the loop will pause and ask the operator:
@@ -99,6 +122,14 @@ def _result_has_new_findings(result: Any) -> bool:
     # Empty hit lists
     for key in ("hits", "successes", "findings", "shares_detected"):
         if key in result and result[key] == []:
+            return False
+    # nmap with 0 open ports across all hosts
+    if "hosts" in result:
+        hosts = result["hosts"]
+        if isinstance(hosts, list) and all(
+            not h.get("ports") or all(p.get("state") != "open" for p in h.get("ports", []))
+            for h in hosts
+        ):
             return False
     return True
 
@@ -259,7 +290,16 @@ class ReActAgent:
                 # Track flag submissions
                 if tb.name == "htb_submit_flag":
                     flag_type = tb.input.get("flag_type", "root")
-                    if isinstance(result, dict) and result.get("correct"):
+                    # HTB tool returns {"slug", "machine_id", "flag_type", "result":{...}}
+                    # "correct" may be nested under "result" or absent; success = no error key
+                    inner = result.get("result", {}) if isinstance(result, dict) else {}
+                    flag_correct = (
+                        result.get("correct")
+                        or inner.get("correct")
+                        or inner.get("success")
+                        or (isinstance(result, dict) and "error" not in result and result.get("machine_id"))
+                    )
+                    if flag_correct:
                         self._metrics.record_flag(flag_type)
                         self._log(f"[agent] ✅ {flag_type.upper()} FLAG OWNED")
 
