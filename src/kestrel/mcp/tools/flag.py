@@ -34,7 +34,11 @@ async def flag_extract(exec_cmd_template: str, os: str = "linux") -> dict[str, A
         root_cmd = "type C:\\Users\\Administrator\\Desktop\\root.txt 2>nul"
     else:
         user_cmd = "cat /home/*/user.txt 2>/dev/null"
-        root_cmd = "cat /root/root.txt 2>/dev/null"
+        root_cmd = (
+            "cat /root/root.txt 2>/dev/null || "
+            "sudo cat /root/root.txt 2>/dev/null || "
+            "find / -name root.txt -readable 2>/dev/null -exec cat {} \\; 2>/dev/null | head -1"
+        )
 
     def build(inner: str) -> str:
         if "{}" in exec_cmd_template:

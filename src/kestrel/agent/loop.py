@@ -1,18 +1,19 @@
-"""Kestrel ReAct Agent — autonomous HTB engagement loop via Anthropic SDK.
+"""Kestrel ReAct Agent -- autonomous HTB engagement loop via Anthropic SDK.
 
-Loop: observe → think → act → observe (repeat until owned / budget / max_iter).
+Loop: observe -> think -> act -> observe (repeat until owned / budget / max_iter).
 
 Tool execution bridges the Anthropic tool_use protocol to the MCP tool Python
-functions directly (no MCP transport — functions are imported and called async).
+functions directly (no MCP transport -- functions are imported and called async).
 
 HITL gates: when the agent needs operator input, the loop prints to terminal
-and blocks on input() — no MCP protocol involved.
+and blocks on input() -- no MCP protocol involved.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,20 +35,35 @@ DEFAULT_MAX_ITERATIONS = 60
 # Tools that signal flag submission (used to record timing)
 _FLAG_SUBMIT_TOOLS = {"htb_submit_flag", "flag_validate"}
 
+# Tool execution timeout table (seconds)  [FIX 1]
+TOOL_TIMEOUT_S: dict[str, int] = {
+    "creds_ssh_bruteforce": 600,
+    "post_linpeas_run": 300,
+    "post_winpeas_run": 300,
+    "recon_nmap_scan": 300,
+    "exploit_run_msf": 180,
+    "recon_web_dirfuzz": 240,
+    "creds_hash_crack": 300,
+}
+_DEFAULT_TOOL_TIMEOUT = 120  # 2 min default
+
+# HITL JSON pattern -- matches {"_agent_hitl": true, ...} without nested braces  [FIX 5]
+_HITL_JSON_RE = re.compile(r'{"_agent_hitl":.*?}', re.DOTALL)
+
 # System prompt for blind agent mode
 _SYSTEM_BLIND = """\
 You are Kestrel, an autonomous HackTheBox engagement agent. Your only goal: own the target machine.
 
 ## Engagement Phases
-p0_setup   → pick target, classify surface, spawn machine, ping IP
-p1_recon   → nmap full scan, web fingerprint, service enum, intel_classify_blind
-p2_vector  → ranked attack vectors via intel_next_step + intel_cve_lookup; confirm with operator
-p3_exploit → run confirmed vector, get foothold (SSH session or web shell)
-p4_privesc → post_enum_system → sudo/SUID/caps/kernel → escalate to root
-p5_close   → extract flags, submit, writeup_kb_synthesize, session_close
+p0_setup   -> pick target, classify surface, spawn machine, ping IP
+p1_recon   -> nmap full scan, web fingerprint, service enum, intel_classify_blind
+p2_vector  -> ranked attack vectors via intel_next_step + intel_cve_lookup; confirm with operator
+p3_exploit -> run confirmed vector, get foothold (SSH session or web shell)
+p4_privesc -> post_enum_system -> sudo/SUID/caps/kernel -> escalate to root
+p5_close   -> extract flags, submit, writeup_kb_synthesize, session_close
 
 ## Mandatory protocol
-1. Start every new machine with: kali_vm_status → vpn_up → phase_enter("p0_setup")
+1. Start every new machine with: kali_vm_status -> vpn_up -> phase_enter("p0_setup")
 2. Call phase_enter BEFORE using tools in that phase.
 3. Call narrate_emit for every significant finding or action.
 4. Call state_write_machine after: IP found, vector chosen, foothold obtained, flag obtained.
@@ -55,21 +71,21 @@ p5_close   → extract flags, submit, writeup_kb_synthesize, session_close
 
 ## SSH credential attack flow
 When SSH is open and web gives no foothold:
-  1. creds_default_check(target, service="ssh") → try known defaults first (fast)
-  2. creds_themed_wordlist_gen(machine=<slug>, keywords=[<page_keywords>], staff=[<names_from_web>]) → build wordlist
-  3. creds_ssh_bruteforce(target=<ip>, users=[<candidates>], wordlist=<output_path>) → hydra 1-user × N-pass
-  4. If 0 hits: try rockyou.txt — creds_ssh_bruteforce(wordlist="/usr/share/wordlists/rockyou.txt")
+  1. creds_default_check(target, service="ssh") -> try known defaults first (fast)
+  2. creds_themed_wordlist_gen(machine=<slug>, keywords=[<page_keywords>], staff=[<names_from_web>]) -> build wordlist
+  3. creds_ssh_bruteforce(target=<ip>, users=[<candidates>], wordlist=<output_path>) -> hydra 1-user x N-pass
+  4. If 0 hits: try rockyou.txt -- creds_ssh_bruteforce(wordlist="/usr/share/wordlists/rockyou.txt")
 
 ## SSH session flow (after creds found)
 After creds_ssh_bruteforce returns hits=[{user, password}]:
-  1. session_open(transport="ssh", params={host, user, password}) → handle_id
-  2. session_exec(handle_id, "id; whoami; hostname") → confirm foothold
-  3. session_exec(handle_id, "find /home -name 'user.txt' 2>/dev/null | xargs cat 2>/dev/null") → user flag
+  1. session_open(transport="ssh", params={host, user, password}) -> handle_id
+  2. session_exec(handle_id, "id; whoami; hostname") -> confirm foothold
+  3. session_exec(handle_id, "find /home -name 'user.txt' 2>/dev/null | xargs cat 2>/dev/null") -> user flag
   4. htb_submit_flag(slug, flag, flag_type="user") then phase_enter("p4_privesc")
-  5. session_exec(handle_id, "sudo -l 2>&1") → pipe to post_privesc_sudo
-  6. session_exec(handle_id, "find / -perm -4000 -type f 2>/dev/null") → SUID binaries
-  7. lolbin_suggest or post_privesc_sudo for GTFOBins → session_exec privesc command
-  8. session_exec(handle_id, "cat /root/root.txt") → root flag
+  5. session_exec(handle_id, "sudo -l 2>&1") -> pipe to post_privesc_sudo
+  6. session_exec(handle_id, "find / -perm -4000 -type f 2>/dev/null") -> SUID binaries
+  7. lolbin_suggest or post_privesc_sudo for GTFOBins -> session_exec privesc command
+  8. session_exec(handle_id, "cat /root/root.txt") -> root flag
 
 ## Web RCE / shell flow
 After getting RCE:
@@ -77,7 +93,7 @@ After getting RCE:
   2. For reverse shells: session_upload + session_exec to run scripts on target
 
 ## HITL gates (operator confirmation required)
-You CANNOT auto-answer these — the loop will pause and ask the operator:
+You CANNOT auto-answer these -- the loop will pause and ask the operator:
 - machine_pick: after listing machines, before spawning
 - vector_confirm: before running any exploit
 - submit_flag: before htb_submit_flag
@@ -87,13 +103,13 @@ To trigger a gate, output ONLY this JSON on a line by itself (no other text on t
   {"_agent_hitl": true, "gate": "<gate_id>", "question": "<question>", "options": ["yes","no"]}
 
 ## Intelligence loop
-- If 3 consecutive tools return no new information → call stuck_check; act on recommendation.
-- If stuck_check.signals includes "rabbit_hole" → pivot vector immediately, don't retry.
-- When unsure what to do next → intel_next_step(machine, current_phase, tried=[...], findings=[...])
+- If 3 consecutive tools return no new information -> call stuck_check; act on recommendation.
+- If stuck_check.signals includes "rabbit_hole" -> pivot vector immediately, don't retry.
+- When unsure what to do next -> intel_next_step(machine, current_phase, tried=[...], findings=[...])
 
 ## Blind mode
 Do NOT use walkthroughs, writeups, or known solutions. Own it from first principles.
-Leverage intel_kb_query and intel_cve_lookup for technique guidance — that's fair.
+Leverage intel_kb_query and intel_cve_lookup for technique guidance -- that's fair.
 
 ## Output format
 Think briefly (1-3 sentences), then call 1-3 tools. Don't dump long reasoning blocks.
@@ -175,8 +191,13 @@ class ReActAgent:
         self._client = anthropic.Anthropic(api_key=api_key)
         self._tools = load_tools_for_anthropic()
         self._metrics = RunMetrics(machine=machine, mode=mode, provider=provider)
+        # Dedup tracking: call_key -> call count  [FIX 3]
+        self._seen_calls: dict[str, int] = {}
+        # Budget warning flags (injected once each)  [FIX 2]
+        self._budget_warn_injected = False
+        self._budget_critical_injected = False
 
-    # ── Public ───────────────────────────────────────────────────────────────
+    # -- Public ---------------------------------------------------------------
 
     def run(self) -> RunMetrics:
         """Run the ReAct loop synchronously. Returns final RunMetrics."""
@@ -191,10 +212,10 @@ class ReActAgent:
         finally:
             slug = self._resolve_session_slug()
             path = self._metrics.save(self._runs_dir, slug)
-            self._log(f"[agent] Metrics saved → {path}")
+            self._log(f"[agent] Metrics saved -> {path}")
         return self._metrics
 
-    # ── Internal loop ─────────────────────────────────────────────────────────
+    # -- Internal loop --------------------------------------------------------
 
     async def _loop(self) -> None:
         messages: list[dict[str, Any]] = [
@@ -209,8 +230,10 @@ class ReActAgent:
 
         for iteration in range(1, self.max_iterations + 1):
             self._metrics.iterations = iteration
-            self._log(f"\n[agent] ── Iteration {iteration} "
-                      f"(tokens used: {self._metrics.tokens_input + self._metrics.tokens_output}) ──")
+            self._log(
+                f"\n[agent] -- Iteration {iteration} "
+                f"(tokens used: {self._metrics.tokens_input + self._metrics.tokens_output}) --"
+            )
 
             # Budget check
             tokens_used = self._metrics.tokens_input + self._metrics.tokens_output
@@ -218,6 +241,29 @@ class ReActAgent:
                 self._log("[agent] Budget exceeded.")
                 self._metrics.finish("budget_exceeded")
                 return
+
+            # Budget warnings (injected once each)  [FIX 2]
+            budget_pct = tokens_used / self.budget_tokens if self.budget_tokens else 0
+            if budget_pct >= 0.90 and not self._budget_critical_injected:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[BUDGET CRITICAL] {tokens_used:,}/{self.budget_tokens:,} tokens ({budget_pct:.0%}). "
+                        f"Iterations left: <={self.max_iterations - iteration}. "
+                        "STOP all recon. If you have a shell: flag_extract NOW, then htb_submit_flag. "
+                        "If no foothold: one last high-probability attempt then stop."
+                    ),
+                })
+                self._budget_critical_injected = True
+            elif budget_pct >= 0.75 and not self._budget_warn_injected:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[BUDGET WARNING] {budget_pct:.0%} tokens used. "
+                        "Prioritize: session_exec -> flag_extract -> htb_submit_flag over additional recon."
+                    ),
+                })
+                self._budget_warn_injected = True
 
             # Call Anthropic
             response = self._client.messages.create(
@@ -240,7 +286,7 @@ class ReActAgent:
             for tb in text_blocks:
                 self._log(f"[agent] {tb.text}")
 
-            # Check for HITL in text blocks — one gate per turn max
+            # Check for HITL in text blocks -- one gate per turn max
             hitl_fired = False
             for tb in text_blocks:
                 hitl = self._parse_inline_hitl(tb.text)
@@ -258,9 +304,9 @@ class ReActAgent:
                     break  # one HITL per iteration
 
             if hitl_fired:
-                continue  # skip tool execution — go to next iteration
+                continue  # skip tool execution -- go to next iteration
 
-            # If no tool calls — agent is done or stuck
+            # If no tool calls -- agent is done or stuck
             if not tool_blocks:
                 stop_reason = response.stop_reason
                 self._log(f"[agent] No tool calls (stop_reason={stop_reason}).")
@@ -277,7 +323,22 @@ class ReActAgent:
             for tb in tool_blocks:
                 self._metrics.tools_called += 1
                 iteration_tool_names.append(tb.name)
-                self._log(f"[agent] → {tb.name}({json.dumps(tb.input)[:120]})")
+                self._log(f"[agent] -> {tb.name}({json.dumps(tb.input)[:120]})")
+
+                # Dedup: warn and track if calling same tool+args 3+ times  [FIX 3]
+                call_key = f"{tb.name}::{json.dumps(tb.input, sort_keys=True)}"
+                self._seen_calls[call_key] = self._seen_calls.get(call_key, 0) + 1
+                if self._seen_calls[call_key] >= 3:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[agent-system] '{tb.name}' called with identical args "
+                            f"{self._seen_calls[call_key]} times. "
+                            "You are cycling. DO NOT call this tool again with same args. "
+                            "Pivot to a different approach."
+                        ),
+                    })
+                    self._metrics.stuck_events = getattr(self._metrics, "stuck_events", 0) + 1
 
                 result = await self._execute_tool(tb.name, tb.input)
 
@@ -301,7 +362,7 @@ class ReActAgent:
                     )
                     if flag_correct:
                         self._metrics.record_flag(flag_type)
-                        self._log(f"[agent] ✅ {flag_type.upper()} FLAG OWNED")
+                        self._log(f"[agent] {flag_type.upper()} FLAG OWNED")
 
                 # Track stuck events
                 if tb.name == "stuck_check" and isinstance(result, dict):
@@ -318,7 +379,7 @@ class ReActAgent:
                             self._metrics.vector_chosen = cats[0]
 
                 result_str = json.dumps(result, ensure_ascii=False, default=str)
-                self._log(f"[agent]   ← {result_str[:200]}")
+                self._log(f"[agent]   <- {result_str[:200]}")
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -342,7 +403,8 @@ class ReActAgent:
             last_tool_names = iteration_tool_names
 
             if consecutive_no_progress >= 3:
-                self._log("[agent] No progress in 3 iterations — recommending stuck_check.")
+                self._log("[agent] No progress in 3 iterations -- recommending stuck_check.")
+                self._metrics.stuck_events = getattr(self._metrics, "stuck_events", 0) + 1  # [FIX 4]
                 messages.append(
                     {
                         "role": "user",
@@ -356,7 +418,7 @@ class ReActAgent:
 
             # Check owned
             if self._metrics.user_flag_at and self._metrics.root_flag_at:
-                self._log("[agent] Both flags obtained — machine owned!")
+                self._log("[agent] Both flags obtained -- machine owned!")
                 self._metrics.finish("owned")
                 return
 
@@ -364,7 +426,7 @@ class ReActAgent:
         if not self._metrics.outcome:
             self._metrics.finish("max_iterations")
 
-    # ── Tool execution ────────────────────────────────────────────────────────
+    # -- Tool execution -------------------------------------------------------
 
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> Any:
         from kestrel.mcp import registry
@@ -372,25 +434,33 @@ class ReActAgent:
         spec = registry.get_tool(name)
         if spec is None:
             return {"error": f"unknown_tool: {name}"}
+        timeout = TOOL_TIMEOUT_S.get(name, _DEFAULT_TOOL_TIMEOUT)  # [FIX 1]
         try:
-            result = await spec.handler(**args)
+            result = await asyncio.wait_for(spec.handler(**args), timeout=timeout)
             return result
+        except asyncio.TimeoutError:
+            return {"error": f"timeout_after_{timeout}s", "tool": name, "timed_out": True}
         except Exception as exc:
             return {"error": str(exc), "tool": name}
 
-    # ── HITL ─────────────────────────────────────────────────────────────────
+    # -- HITL -----------------------------------------------------------------
 
     def _parse_inline_hitl(self, text: str) -> dict[str, Any] | None:
-        """Extract JSON HITL gate from text blocks (see _SYSTEM_BLIND)."""
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith('{"_agent_hitl"'):
-                try:
-                    parsed = json.loads(line)
-                    if parsed.get("_agent_hitl"):
-                        return parsed
-                except json.JSONDecodeError:
-                    pass
+        """Extract JSON HITL gate from text blocks (see _SYSTEM_BLIND).
+
+        Uses regex to handle markdown code fences and minor formatting variations.
+        """
+        # Strip markdown code fences  [FIX 5]
+        clean = re.sub(r"```(?:json)?\s*", "", text)
+        clean = clean.replace("```", "")
+        match = _HITL_JSON_RE.search(clean)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if parsed.get("_agent_hitl"):
+                    return parsed
+            except Exception:
+                pass
         return None
 
     def _terminal_hitl(self, gate: dict[str, Any]) -> str:
@@ -420,7 +490,7 @@ class ReActAgent:
             answer = options[0] if options else "yes"
         return answer
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # -- Helpers --------------------------------------------------------------
 
     def _initial_prompt(self) -> str:
         state_summary = self._load_state_summary()
@@ -428,8 +498,9 @@ class ReActAgent:
             f"Machine: {self.machine}\n"
             f"Mode: {self.mode}\n"
             f"Current state:\n{state_summary}\n\n"
-            f"Begin the engagement. Start with the Kali gate (kali_vm_status), "
-            f"then lifecycle protocol: session_open → phase_enter('p0_setup') → proceed."
+            f"Begin the engagement. "
+            f"Protocol: kali_vm_status -> vpn_up -> htb_spawn if needed -> phase_enter('p0_setup') -> kali_ping_target(ip). "
+            f"DO NOT call session_open until you have confirmed SSH credentials."
         )
 
     def _load_state_summary(self) -> str:

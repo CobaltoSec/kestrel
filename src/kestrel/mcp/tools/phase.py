@@ -179,6 +179,33 @@ async def phase_enter(phase: str, machine: str | None = None) -> dict[str, Any]:
             pass
 
     guidance = PHASE_GUIDANCE[phase]
+
+    # FIX-6: Filter suggested_tools by OS / AD profile when machine is provided
+    try:
+        if machine:
+            _pm = ctx.state_store.get_machine(machine)
+            if _pm:
+                _ad_joined = getattr(_pm, "ad_joined", False)
+                _os_hint = (getattr(_pm, "os_hint", "") or "").lower()
+
+                _AD_TOOLS = {"ad_bloodhound_collect", "ad_kerberoast", "ad_asreproast",
+                             "ad_dcsync", "recon_ldap_enum"}
+                _WIN_TOOLS = {"post_winpeas_run", "post_privesc_potato", "post_check_token"}
+                _LINUX_TOOLS = {"post_linpeas_run", "post_privesc_sudo", "post_privesc_kernel",
+                                "post_check_suid"}
+
+                _filtered = list(guidance.get("suggested_tools", []))
+                if not _ad_joined:
+                    _filtered = [t for t in _filtered if t not in _AD_TOOLS]
+                if _os_hint == "linux":
+                    _filtered = [t for t in _filtered if t not in _WIN_TOOLS]
+                elif _os_hint == "windows":
+                    _filtered = [t for t in _filtered if t not in _LINUX_TOOLS]
+
+                guidance = {**guidance, "suggested_tools": _filtered}
+    except Exception:
+        pass
+
     return {
         "phase": phase,
         **guidance,

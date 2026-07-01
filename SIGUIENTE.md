@@ -5,9 +5,9 @@
 
 ---
 
-## PRÓXIMO — E2E Reactor post-mejoras V10b-S2
+## PRÓXIMO — E2E Reactor post-mejoras V10b-S3
 
-**Estado**: Listo para correr. 12 mejoras implementadas (474 tests ✅, commits b16dd4d + 879c600).
+**Estado**: Listo para correr. 30 mejoras adicionales implementadas (474 tests ✅, sin commit aún).
 
 **Target**: Reactor — 10.129.41.238 (Easy, Linux). Spawnar si no está activa.
 
@@ -15,10 +15,12 @@
 1. `kali_vm_status` → `vpn_up` → `kali_ping_target 10.129.41.238`
 2. `creds_themed_wordlist_gen(machine="reactor", keywords=["nuclear","site7","monitoring","reactorwatch","coolant"], staff=["james","elena","marcus","jthompson","erodriguez","mkim"])`
 3. `creds_ssh_bruteforce(target="10.129.41.238", users=["jthompson","james","erodriguez","elena","mkim","marcus","reactor","admin"], wordlist="/tmp/kestrel-themed-reactor.txt")`
+   - `-e nsr` ahora incluido → prueba `reactor/reactor`, `rotcaer`, `""` automáticamente
 4. Si 0 hits → `creds_ssh_bruteforce` con `/usr/share/wordlists/rockyou.txt`
-5. `session_open` → `session_exec` → flags → `htb_submit_flag`
+5. `session_open` → `post_check_suid` + `post_linpeas_run` → `flag_extract` → `htb_submit_flag`
 
 **Contexto**: Reactor tiene SSH 22 + port 3000 (Next.js 15 estático "ReactorWatch"). Web agotada. Vector es SSH.
+Bloqueante histórico probable: `CRED_FAIL_THRESHOLD=3` abandonaba bruteforce en 3 fallos. Ahora threshold=20 (100 durante bruteforce activo).
 
 **Blind siempre**: no writeups, no hints externos.
 
@@ -119,7 +121,32 @@
 - **M11** `post.py` SUDO_GTFOBINS 9→35 binarios (bash, env, cp, git, docker, nmap, etc.).
 - **M12** `post.py` `post_linpeas_run` — copia local en Kali primero, fallback GitHub.
 
-**E2E pendiente**: correr agente headless contra una Easy machine activa con ANTHROPIC_API_KEY.
+### S3 — Deep audit + 30 mejoras pre-E2E (2026-07-01) ← DONE (474 tests ✅, sin commit)
+
+5 agentes investigación + 5 agentes implementación paralelos. Root causes del E2E fallido identificados y resueltos.
+
+**Bloqueantes críticos resueltos**:
+- `CRED_FAIL_THRESHOLD` 3→20 (100 durante bruteforce activo) — abandonaba bruteforce en 3 fallos
+- `-e nsr` en hydra — prueba `user=password` automáticamente (`reactor/reactor` sin estar en wordlist)
+- `detect_rabbit_hole` falsos positivos — filtra heartbeats, window 40→80 chars, consecutive 4→6
+- Port 3000 ausente en `score_rules` — `intel_classify_blind` retornaba attack_plan vacío para Reactor
+- `post_linpeas_run` ANSI codes — `finding_count` siempre 0; `tail -c 8000` → grep filter 16000 bytes
+- SSH sin keepalive → linpeas rompía sesión a los 3-5 min
+- `_execute_tool` sin timeout → agente podía bloquearse indefinidamente
+
+**Otros fixes**:
+- `intel_next_step` lee `attack_plan` del state (antes ciega al contexto ya calculado)
+- `post_check_suid` nueva tool — SUID privesc sin correr linpeas entero
+- `connect_timeout` 10→30s, `flag_extract` sudo fallback
+- `recon_web_fingerprint` 4000→16000 bytes + `__NEXT_DATA__` extraction
+- `_probe_nextjs` lee buildManifest real; Next.js/Node en `FRAMEWORK_CATEGORIES`
+- `phase_enter` filtra tools AD/OS según machine state
+- `p3a_pre_foothold` fallback incluye SSH cred reuse steps
+- Budget warnings 75%/90%, dedup tool+args, HITL regex robusta, bridge 800→2000 chars
+
+**14 archivos modificados**: `creds.py`, `fingerprint.py`, `recon.py`, `stuck.py`, `intel.py`, `phase.py`, `post.py`, `ssh.py`, `session.py`, `flag.py`, `loop.py`, `bridge.py`, `test_stuck_detector.py`, `test_tools_recon.py`
+
+**E2E pendiente**: commit S3 + correr agente headless contra Reactor con ANTHROPIC_API_KEY.
 
 **Por qué es el diferenciador**: ninguna herramienta HTB pública hace esto. Pasa de "Claude con tools" a "agente de seguridad con benchmarks". Es lo que convierte el proyecto en investigación publicable.
 

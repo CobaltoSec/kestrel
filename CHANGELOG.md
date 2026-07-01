@@ -8,6 +8,45 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-V10b-S3] — 2026-07-01
+
+Deep audit pre-E2E: 5 agentes de investigación (SSH/creds, recon/web, intel/stuck, post/session, agent loop) identificaron 37 gaps; 5 agentes de implementación paralelos aplicaron 30 fixes en 14 archivos. 474 tests ✅.
+
+**Bloqueantes críticos resueltos (probables causas del E2E fallido)**:
+- `core/stuck.py`: `CRED_FAIL_THRESHOLD` 3→20; threshold sube a 100 durante bruteforce activo — abandonaba SSH bruteforce en las primeras 3 credenciales fallidas
+- `mcp/tools/creds.py`: `-e nsr` agregado a hydra — prueba `user=password` automáticamente (`reactor/reactor` sin estar en wordlist)
+- `core/stuck.py`: `detect_rabbit_hole` — filtra eventos de infraestructura (heartbeat, phase_enter, tool_start/end); window 40→80 chars; consecutive threshold 4→6 — generaba falsos positivos en runs normales
+- `core/fingerprint.py`: port 3000 (y 3001, 4000, 5000, 9000) agregados a `score_rules["web-exploit"]`; nueva señal `services_any: [http, https]` — `intel_classify_blind` retornaba attack_plan vacío para Reactor
+- `mcp/tools/post.py`: `post_linpeas_run` — ANSI strip antes de matching `[+]` (finding_count era siempre 0); `tail -c 8000` → grep filter `head -c 16000` (cortaba SUID/sudo del medio del output)
+- `transport/ssh.py`: `set_keepalive(30)` — linpeas (3-8 min) rompía sesión silenciosamente
+- `agent/loop.py`: `_execute_tool` con `asyncio.wait_for` — hydra/linpeas/nmap podían bloquear el agente indefinidamente; `TOOL_TIMEOUT_S` por tool (bruteforce=600s, default=120s)
+
+**Mejoras de inteligencia**:
+- `mcp/tools/intel.py`: `intel_next_step` carga `attack_plan.primary_chain` del state y lo inyecta en la KB query — antes ciega al contexto ya calculado
+- `mcp/tools/intel.py`: `p3a_pre_foothold` fallback incluye `ssh_cred_reuse_from_web` y `ssh_themed_bruteforce` como steps explícitos
+- `mcp/tools/intel.py`: cooldown 15 min en `_detect_stuck_signals` — evita re-emitir el mismo signal en cada llamada
+- `mcp/tools/phase.py`: `phase_enter` filtra `suggested_tools` según `ad_joined` y `os_hint` del machine state
+
+**Mejoras de recon**:
+- `mcp/tools/recon.py`: `_probe_nextjs` lee contenido real de `buildManifest.js` y `pages-manifest.json` (antes solo verificaba existencia)
+- `mcp/tools/recon.py`: `recon_web_fingerprint` body 4000→16000 bytes + extracción de `__NEXT_DATA__` con JSON parse
+- `mcp/tools/recon.py`: `recon_web_dirfuzz` detecta Next.js y retorna `nextjs_detected + nextjs_suggested_paths`
+- `core/fingerprint.py`: Next.js, React, Node.js agregados a `FRAMEWORK_CATEGORIES`
+
+**Mejoras de post-explotación**:
+- `mcp/tools/post.py`: nueva tool `post_check_suid` — `find / -perm -4000`, match contra 33 GTFOBins, retorna `exploitable[]` con PoC hint; alternativa rápida a linpeas para privesc vía SUID
+- `mcp/tools/session.py`: `connect_timeout` 10→30s para máquinas recién spawneadas
+- `mcp/tools/flag.py`: `root.txt` con fallback `sudo cat` + `find -readable`
+- `mcp/tools/post.py`: `post_privesc_sudo` — fix falso positivo python/python3 con regex word-boundary
+
+**Mejoras del agent loop**:
+- `agent/loop.py`: budget warnings al 75% y 90% del token budget
+- `agent/loop.py`: dedup tool+args con `_seen_calls` — warning + `stuck_events++` al tercer call idéntico
+- `agent/loop.py`: `_parse_inline_hitl` robusta con regex + strip de markdown code fences
+- `agent/loop.py`: initial prompt corregido — no llama `session_open` antes de tener IP y credenciales
+- `agent/bridge.py`: description limit 800→2000 chars
+- Tests actualizados: `test_stuck_detector.py` (3 assertions), `test_tools_recon.py` (3 assertions)
+
 ## [RT-KESTREL-V10b-S2] — 2026-07-01
 
 - `mcp/tools/creds.py`: `creds_ssh_bruteforce` — hydra wrapper (1 user × N passwords) via Kali SSH; parsea output `[22][ssh] host: … login: … password: …`; retorna `{hit_count, hits:[{user, password}]}` (M1)

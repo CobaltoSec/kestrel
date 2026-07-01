@@ -39,6 +39,7 @@ async def session_open(transport: str, params: dict[str, Any]) -> dict[str, Any]
             port=int(params.get("port", 22)),
             key_path=params.get("key_path"),
             password=params.get("password"),
+            timeout=float(params.get("connect_timeout", 30.0)),
         )
     elif transport_l == "msf":
         sess = MSFRPCSession.from_config()

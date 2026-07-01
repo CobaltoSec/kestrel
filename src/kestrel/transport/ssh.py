@@ -62,6 +62,7 @@ class SSHSession(Session):
         if self.password is not None:
             kwargs["password"] = self.password
         client.connect(**kwargs)
+        client.get_transport().set_keepalive(30)  # 30s keepalive — evita que linpeas rompa la sesión
         self._client = client
 
     def exec(self, cmd: str, timeout: float = 120.0) -> ExecResult:

@@ -10,7 +10,7 @@ artifacts — read-only.
 Signals detected:
     shell_lost         – RCE/foothold artifact dead (connection reset, dead, etc.)
     hash_stuck         – hash policy triggered without resolution
-    cred_exhausted     – >= 3 auth_failed without success in recent events
+    cred_exhausted     – >= 20 auth_failed without success in recent events
     progress_stalled   – no findings/state update in last STALL_MINUTES wall-clock
 
 Recommendation values:
@@ -38,13 +38,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 STALL_MINUTES = 30
-CRED_FAIL_THRESHOLD = 3
+CRED_FAIL_THRESHOLD = 20
 LAB_UNSTABLE_WINDOW_MINUTES = 10
 LAB_UNSTABLE_THRESHOLD = 3   # >= N matches in window = lab_unstable signal
 # IMP-06 rabbit hole detection
 RABBIT_HOLE_WINDOW_MINUTES = 20
 RABBIT_HOLE_SAME_TEXT_THRESHOLD = 3    # same analyze narrate text repeated >= N times
-RABBIT_HOLE_CONSECUTIVE_THRESHOLD = 4  # same event detail repeated consecutively >= N times
+RABBIT_HOLE_CONSECUTIVE_THRESHOLD = 6  # same event detail repeated consecutively >= N times
+
+# Infrastructure events excluded from rabbit-hole detection to reduce false positives
+_RABBIT_HOLE_FILTERED_EVENTS = frozenset(
+    ("heartbeat", "phase_enter", "tool_start", "tool_end", "kali_ping")
+)
 
 SHELL_LOST_PATTERNS = [
     r"shell\s+(?:dead|muerta|lost|died|caída|caida)",
@@ -151,10 +156,17 @@ def detect_cred_exhausted(estado: str, jsonl: list[dict]) -> bool:
     natural_signal = any(kw in estado for kw in CRED_FAILED_KEYWORDS)
     if natural_signal:
         return True
-    # Quantitative: >= N auth_failed events
+
     fails = sum(1 for e in jsonl
                 if "auth_failed" in (e.get("event", "") + e.get("detail", "")).lower())
-    return fails >= CRED_FAIL_THRESHOLD
+
+    # During active bruteforce, use a much higher threshold to avoid false positives
+    active_brute = any(
+        e.get("event") == "tool_start" and "bruteforce" in e.get("detail", "").lower()
+        for e in jsonl[-20:]
+    )
+    threshold = 100 if active_brute else CRED_FAIL_THRESHOLD
+    return fails >= threshold
 
 
 def detect_progress_stalled(estado_path: Path, findings_path: Path,
@@ -177,17 +189,21 @@ def detect_rabbit_hole(estado: str, jsonl: list[dict]) -> bool:
     1. The same analyze (🔍) narrate text appears >= RABBIT_HOLE_SAME_TEXT_THRESHOLD
        times in the last RABBIT_HOLE_WINDOW_MINUTES, OR
     2. The same event detail appears consecutively >= RABBIT_HOLE_CONSECUTIVE_THRESHOLD.
+
+    Infrastructure events (heartbeat, phase_enter, tool_start, tool_end, kali_ping)
+    are excluded to prevent false positives from operational noise.
     """
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - RABBIT_HOLE_WINDOW_MINUTES * 60
     recent = [
         e for e in jsonl
         if (parse_iso(e.get("ts", "")) or datetime.min.replace(tzinfo=timezone.utc)).timestamp() >= cutoff
+        and e.get("event") not in _RABBIT_HOLE_FILTERED_EVENTS
     ]
 
     # Signal 1: same 🔍 analyze narrate text repeated
     analyze_texts = [
-        e.get("detail", "")[:40].lower().strip()
+        e.get("detail", "")[:80].lower().strip()
         for e in recent
         if e.get("event") == "narrate" and e.get("stream") == "🔍"
     ]
@@ -197,7 +213,7 @@ def detect_rabbit_hole(estado: str, jsonl: list[dict]) -> bool:
             return True
 
     # Signal 2: same event detail repeated consecutively
-    event_keys = [e.get("detail", "")[:30].lower().strip() for e in recent if e.get("event")]
+    event_keys = [e.get("detail", "")[:60].lower().strip() for e in recent if e.get("event")]
     consecutive = 1
     for i in range(1, len(event_keys)):
         if event_keys[i] and event_keys[i] == event_keys[i - 1]:

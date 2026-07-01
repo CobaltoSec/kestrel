@@ -277,7 +277,7 @@ async def recon_web_fingerprint(
     cmd = (
         f"curl -ksI --max-time 15 {shlex.quote(url)} ; "
         f"echo '---BODY---' ; "
-        f"curl -ks --max-time 15 {shlex.quote(url)} | head -c 4000"
+        f"curl -ks --max-time 15 {shlex.quote(url)} | head -c 16000"
     )
     raw = await _run_kali(cmd, timeout=30.0)
     headers, _, body = raw["stdout"].partition("---BODY---")
@@ -307,6 +307,22 @@ async def recon_web_fingerprint(
         e = body_l.find("</title>", s)
         if e > s:
             fp["title"] = body[s:e].strip()
+
+    # __NEXT_DATA__ extraction
+    import re as _re_next
+    import json as _json_next
+    next_data = None
+    if "__NEXT_DATA__" in body:
+        m_nd = _re_next.search(
+            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(\{.*?\})</script>',
+            body, _re_next.DOTALL
+        )
+        if m_nd:
+            try:
+                next_data = _json_next.loads(m_nd.group(1))
+            except Exception:
+                next_data = {"raw": m_nd.group(1)[:1000]}
+
     artifact = _save_artifact(machine, "web", f"{target}_{port}.txt", raw["stdout"])
     # IMP-19: persist endpoint to state
     _save_endpoint_tried(machine, url, status=status_code, interesting=bool(fp["title"]))
@@ -317,23 +333,31 @@ async def recon_web_fingerprint(
     if "_next" in body.lower() or powered_by.startswith("next"):
         nextjs_analysis = await _probe_nextjs(target, port)
 
-    return {**fp, "rc": raw["rc"], "artifact": artifact, "nextjs_analysis": nextjs_analysis}
+    return {**fp, "rc": raw["rc"], "artifact": artifact, "nextjs_analysis": nextjs_analysis, "next_data": next_data}
 
 
 async def _probe_nextjs(target: str, port: int) -> dict[str, Any]:
-    """IMP-02: lightweight Next.js static-vs-dynamic probe (2 curl calls, ~15s max)."""
+    """IMP-02: lightweight Next.js static-vs-dynamic probe + manifest content read."""
     scheme = "https" if port in (443, 8443) else "http"
     base = f"{scheme}://{target}:{port}"
     cmd = (
         f"curl -ks --max-time 10 -o /dev/null -w '%{{http_code}}' "
         f"{shlex.quote(base + '/_next/data/buildManifest.json')} ; "
+        f"echo '---MANIFEST---' ; "
+        f"curl -ks --max-time 10 {shlex.quote(base + '/_next/static/buildManifest.js')} | head -c 8000 ; "
+        f"echo '---PAGES---' ; "
+        f"curl -ks --max-time 10 {shlex.quote(base + '/_next/static/chunks/pages-manifest.json')} 2>/dev/null | head -c 4000 ; "
         f"echo '---RSC---' ; "
         f"curl -ks --max-time 10 {shlex.quote(base + '/__next_f')} 2>/dev/null | head -c 300"
     )
-    raw = await _run_kali(cmd, timeout=25.0)
-    parts = raw["stdout"].split("---RSC---", 1)
-    manifest_status = parts[0].strip()
-    rsc_chunk = parts[1].strip() if len(parts) > 1 else ""
+    raw = await _run_kali(cmd, timeout=35.0)
+    # Parse output sections
+    manifest_raw, _, rest = raw["stdout"].partition("---MANIFEST---")
+    manifest_status = manifest_raw.strip()
+    manifest_body, _, rest2 = rest.partition("---PAGES---")
+    _pages_body, _, rsc_raw = rest2.partition("---RSC---")
+    manifest_content = manifest_body.strip()[:2000] if manifest_body.strip() else None
+    rsc_chunk = rsc_raw.strip()
     # Server Actions presence: RSC payload contains "S":true or "action" references
     has_server_actions = '"S":true' in rsc_chunk or '"action"' in rsc_chunk
     is_static = not has_server_actions
@@ -351,6 +375,7 @@ async def _probe_nextjs(target: str, port: int) -> dict[str, Any]:
         "detected": True,
         "is_static": is_static,
         "has_build_manifest": manifest_status == "200",
+        "manifest_content": manifest_content,
         "has_server_actions": has_server_actions,
         "operator_hint": hint,
     }
@@ -442,6 +467,12 @@ async def recon_ldap_enum(
 
 # IMP-05: recon_web_dirfuzz ───────────────────────────────────────────────────
 
+_NEXTJS_PROBE_PATHS = [
+    "api/users", "api/user", "api/me", "api/auth", "api/login", "api/admin",
+    "admin", "login", "dashboard", "team", "about", "staff",
+    "_next/data", "api/v1/users",
+]
+
 _DIRFUZZ_LINE_RE = re.compile(
     r"^\s*(\d{3})\s+.*?(https?://\S+)\s*$",
     re.IGNORECASE,
@@ -494,8 +525,19 @@ async def recon_web_dirfuzz(
     # IMP-06: optional bypass header (e.g. x-middleware-subrequest for Next.js middleware bypass)
     header_arg = f"-H {shlex.quote(bypass_header)}" if bypass_header else ""
 
-    # Build feroxbuster command; fall back to gobuster check
+    # Probe Next.js before main fuzz
+    _probe_cmd = (
+        f"curl -ks -o /dev/null -w '%{{http_code}}' --max-time 5 "
+        f"{shlex.quote(base_url + '_next/static/')}"
+    )
+    _probe_res = await _run_kali(_probe_cmd, timeout=10.0)
+    nextjs_detected = _probe_res.get("stdout", "").strip() in ("200", "403", "301", "302")
+
+    # Build feroxbuster command; embed Next.js probe as first step in same shell call
     ferox_cmd = (
+        f"_NJS=$(curl -ks -o /dev/null -w '%{{http_code}}' --max-time 5 "
+        f"{shlex.quote(base_url + '_next/static/')} 2>/dev/null); "
+        f"echo \"NEXTJS_PROBE:$_NJS\"; "
         f"command -v feroxbuster >/dev/null 2>&1 && "
         f"feroxbuster --url {shlex.quote(base_url)} "
         f"--wordlist {shlex.quote(wordlist)} "
@@ -519,6 +561,14 @@ async def recon_web_dirfuzz(
             "hint": "Install feroxbuster or gobuster on Kali: apt install feroxbuster gobuster",
             "target": target,
         }
+
+    # Parse Next.js probe result from embedded output line
+    nextjs_detected = False
+    for _line in raw["stdout"].splitlines():
+        if _line.startswith("NEXTJS_PROBE:"):
+            _njs_status = _line.split(":", 1)[1].strip()
+            nextjs_detected = _njs_status in ("200", "403", "301", "302")
+            break
 
     discovered = _parse_feroxbuster(raw["stdout"])
     raw_output = raw["stdout"]
@@ -582,6 +632,8 @@ async def recon_web_dirfuzz(
         "artifact": artifact,
         "bypass_header_used": bypass_header,
         "extra_paths_count": len(extra_paths) if extra_paths else 0,
+        "nextjs_detected": nextjs_detected,
+        "nextjs_suggested_paths": _NEXTJS_PROBE_PATHS if nextjs_detected else [],
     }
 
 

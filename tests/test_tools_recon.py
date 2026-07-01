@@ -482,8 +482,9 @@ def test_dirfuzz_bypass_header_injected(fresh_ctx, mock_via_kali):
     )
     calls = mock_via_kali["calls"]
     assert len(calls) >= 1
-    cmd = calls[0][0]
-    assert "x-middleware-subrequest" in cmd, f"bypass_header not in cmd: {cmd}"
+    # bypass_header may appear in any call (probe runs first, then feroxbuster)
+    combined = " ".join(c[0] for c in calls)
+    assert "x-middleware-subrequest" in combined, f"bypass_header not in any cmd: {calls}"
 
 
 def test_dirfuzz_extra_paths_triggers_second_run(fresh_ctx, mock_via_kali):
@@ -518,9 +519,9 @@ def test_fingerprint_nextjs_static_detected(fresh_ctx, mock_via_kali):
             ),
             stderr="", rc=0, duration_s=0.5,
         ),
-        # Second call: _probe_nextjs (manifest status + RSC chunk)
+        # Second call: _probe_nextjs (manifest status + MANIFEST + PAGES + RSC sections)
         ExecResult(
-            stdout="404\n---RSC---\n",
+            stdout="404\n---MANIFEST---\n\n---PAGES---\n\n---RSC---\n",
             stderr="", rc=0, duration_s=0.3,
         ),
     ]
@@ -562,7 +563,7 @@ def test_fingerprint_nextjs_with_server_actions(fresh_ctx, mock_via_kali):
             stderr="", rc=0, duration_s=0.4,
         ),
         ExecResult(
-            stdout='200\n---RSC---\n1:["$","div",null,{"children":"hello"},"S":true]',
+            stdout='200\n---MANIFEST---\n\n---PAGES---\n\n---RSC---\n1:["$","div",null,{"children":"hello"},"S":true]',
             stderr="", rc=0, duration_s=0.2,
         ),
     ]

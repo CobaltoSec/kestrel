@@ -502,6 +502,22 @@ _PHASE_FALLBACK_STEPS: dict[str, list[dict[str, Any]]] = {
             "rationale": "Credential brute-force against web login form.",
             "source": "builtin",
         },
+        {
+            "priority": 6,
+            "action": "ssh_cred_reuse_from_web",
+            "command": "creds_save_tried → creds_ssh_bruteforce con creds encontradas en web",
+            "rationale": "Si la app web expuso credenciales o usernames, probarlos en SSH. "
+                         "Usar creds_themed_wordlist_gen con usernames extraídos y creds_ssh_bruteforce.",
+            "source": "builtin",
+        },
+        {
+            "priority": 7,
+            "action": "ssh_themed_bruteforce",
+            "command": "creds_themed_wordlist_gen(machine=...) → creds_ssh_bruteforce",
+            "rationale": "Generar wordlist temática con nombre de máquina y staff names extraídos. "
+                         "Luego SSH bruteforce. -e nsr ya cubre user=password automáticamente.",
+            "source": "builtin",
+        },
     ],
     "p3b_post_foothold": [
         {
@@ -813,6 +829,33 @@ def _detect_stuck_signals(session_dir_str: str, machine: str) -> list[str]:
     # IMP-06
     if detect_rabbit_hole(estado, jsonl):
         signals.append("rabbit_hole")
+
+    # Cooldown: don't re-emit signals fired in the last 15 min
+    _SIGNAL_COOLDOWN_MIN = 15
+    try:
+        import datetime as _dt
+        _now_ts = _dt.datetime.now(_dt.timezone.utc).timestamp()
+        _cutoff_ts = _now_ts - _SIGNAL_COOLDOWN_MIN * 60
+        # Check stuck_fired events in jsonl for recently emitted signals
+        _recently_fired: set[str] = set()
+        for _e in jsonl:
+            if _e.get("event") == "stuck_fired":
+                try:
+                    _e_ts = _dt.datetime.fromisoformat(
+                        (_e.get("ts") or "").replace("Z", "+00:00")
+                    ).timestamp()
+                    if _e_ts >= _cutoff_ts:
+                        _sig = _e.get("detail", "")
+                        if _sig:
+                            _recently_fired.add(_sig)
+                except (ValueError, AttributeError):
+                    pass
+        # Fallback: also suppress if signal name literal appears in estado
+        _in_estado = {s for s in signals if s.lower() in (estado or "").lower()}
+        signals = [s for s in signals if s not in _recently_fired and s not in _in_estado]
+    except Exception:
+        pass
+
     return signals
 
 
@@ -886,6 +929,25 @@ async def intel_next_step(
     except Exception:
         _auto_tried_count = 0
 
+    # Enriquecer findings con attack_plan persistido en state
+    _attack_plan_hint = ""
+    try:
+        if machine:
+            _ctx2 = mcp_context.get_context()
+            _m2 = _ctx2.state_store.get_machine(machine)
+            if _m2:
+                _ap = getattr(_m2, "attack_plan", None) or {}
+                if isinstance(_ap, dict):
+                    _pc = _ap.get("primary_chain", {})
+                    _cats = _pc.get("categories", [])
+                    if _cats:
+                        _attack_plan_hint = " ".join(_cats[:3])
+    except Exception:
+        pass
+
+    if _attack_plan_hint:
+        findings = list(findings or []) + [_attack_plan_hint]
+
     query = _build_next_step_query(current_phase, findings, os_hint)
     kb_result = await intel_kb_query(query, top_k=top_k)
     chunks = kb_result.get("chunks", [])
@@ -925,6 +987,7 @@ async def intel_next_step(
         "tried_count": len(tried),
         "findings_count": len(findings),
         "auto_tried_merged": _auto_tried_count,
+        "attack_plan_primary": _attack_plan_hint,
     }
 
 

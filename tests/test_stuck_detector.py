@@ -94,14 +94,19 @@ def test_hash_resolved_no_signal(tmp_path: Path):
 
 
 def test_cred_exhausted_from_jsonl(tmp_path: Path):
-    session = make_session(
-        tmp_path,
-        jsonl_lines=[
-            {"ts": "2026-05-11T19:00:00Z", "event": "winrm_attempt", "detail": "admin:wonderful1 auth_failed"},
-            {"ts": "2026-05-11T19:01:00Z", "event": "winrm_attempt", "detail": "marcus:wonderful1 auth_failed"},
-            {"ts": "2026-05-11T19:02:00Z", "event": "winrm_attempt", "detail": "cactidbuser:7pyrf6ly8qx4 auth_failed"},
-        ],
-    )
+    # CRED_FAIL_THRESHOLD is now 20 — need >= 20 auth_failed events in jsonl
+    users = [
+        "admin", "marcus", "cactidbuser", "monitorsdbuser", "svc_backup",
+        "administrator", "guest", "user1", "user2", "user3",
+        "alice", "bob", "charlie", "david", "eve",
+        "frank", "grace", "henry", "ivy", "jack",
+    ]
+    jsonl_lines = [
+        {"ts": f"2026-05-11T19:{i:02d}:00Z", "event": "winrm_attempt",
+         "detail": f"{u}:password auth_failed"}
+        for i, u in enumerate(users)
+    ]
+    session = make_session(tmp_path, jsonl_lines=jsonl_lines)
     code, out = run(session)
     assert code == 1
     assert "cred_exhausted" in out["signals"]
@@ -187,10 +192,10 @@ def test_alternatives_from_attack_plan(tmp_path: Path):
     }
     (session / "fingerprint.json").write_text(_json.dumps(fp))
     (session / "findings.md").write_text("")
+    # CRED_FAIL_THRESHOLD is now 20 — generate 20 auth_failed events
     jsonl = [
-        {"ts": "2026-05-17T10:00:00Z", "event": "auth_failed"},
-        {"ts": "2026-05-17T10:01:00Z", "event": "auth_failed"},
-        {"ts": "2026-05-17T10:02:00Z", "event": "auth_failed"},
+        {"ts": f"2026-05-17T10:{i:02d}:00Z", "event": "auth_failed"}
+        for i in range(20)
     ]
     (session / "sessions.jsonl").write_text("\n".join(_json.dumps(e) for e in jsonl) + "\n")
     (session / "estado.md").write_text("")
@@ -276,12 +281,14 @@ def test_rabbit_hole_same_narrate_text_detected(tmp_path: Path):
 
 
 def test_rabbit_hole_consecutive_events_detected(tmp_path: Path):
-    """IMP-06: same event detail ≥4 consecutive times → rabbit_hole signal."""
+    """IMP-06: same event detail ≥6 consecutive times → rabbit_hole signal."""
     ts = _now_ts()
     detail = "gobuster /admin always 403"
     session = make_session(
         tmp_path,
         jsonl_lines=[
+            {"ts": ts, "event": "recon_attempt", "detail": detail},
+            {"ts": ts, "event": "recon_attempt", "detail": detail},
             {"ts": ts, "event": "recon_attempt", "detail": detail},
             {"ts": ts, "event": "recon_attempt", "detail": detail},
             {"ts": ts, "event": "recon_attempt", "detail": detail},

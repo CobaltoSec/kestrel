@@ -30,7 +30,7 @@ def load_tools_for_anthropic(
         result.append(
             {
                 "name": spec.name,
-                "description": spec.description[:800],
+                "description": spec.description[:2000],
                 "input_schema": spec.input_schema,
             }
         )

