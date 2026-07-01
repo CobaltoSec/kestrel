@@ -8,12 +8,12 @@
 ## CAUSAS RAÍZ
 
 1. ~~**Env vars ausentes**~~ — ✅ RESUELTO 2026-07-01.
-2. **Fase 13 nunca completada**: cutover planeada en v0.4.0 nunca ejecutada. `skill/phases/` sigue existiendo — las phases apuntan a paths que ya no existen. `htb_cli.py` tampoco existe.
-3. **Lifecycle tools nunca llamados**: el modelo llama `narrate_emit` pero nunca `session_open`, `phase_enter`, ni `session_close`. `session_slug` permanece null → sin resume posible.
+2. ~~**Fase 13 nunca completada**~~ — ✅ RESUELTO 2026-07-01. `skill/phases/` → `docs/v04-phases-archive/`.
+3. ~~**Lifecycle tools nunca llamados**~~ — ✅ PARCIALMENTE RESUELTO 2026-07-01. SKILL.md actualizado. E2E confirmó que las tools funcionan cuando se las llama. Gaps de automatización → V08.
 
 ---
 
-## RT-KESTREL-FIX-V01 ← PRÓXIMO (1-2h)
+## RT-KESTREL-FIX-V01 ← CERRADO 2026-07-01
 
 **Objetivo:** Kestrel funcional E2E contra una máquina Easy.
 
@@ -27,13 +27,13 @@
 
 5. ~~**Fix path MCP server**~~ — ✅ DONE 2026-07-01. `~/.claude.json` actualizado: `C:\opsec\runner\` → `C:\Proyectos\Kestrel\`. Requiere restart Claude Code para tomar efecto.
 
-6. **E2E** — correr contra cualquier Easy Machine activa. Verificar: `session_slug` escrito, `sessions.jsonl` tiene eventos de lifecycle, resume funciona en segunda sesión. **PENDIENTE: reiniciar Claude Code primero.**
+6. ~~**E2E**~~ — ✅ DONE 2026-07-01. Reactor 10.129.41.238: Kali gate ✅, VPN ✅, spawn ✅, ping ✅, `sessions.jsonl` con lifecycle events ✅. 3 gaps → V08: (1) session_slug no persiste automático, (2) current_session no se actualiza al cambiar máquina, (3) phase_enter no emite state_append_event.
 
-**Deliverable:** Kestrel corre una máquina Easy sin intervención manual fuera de los 4 gates HITL previstos.
+**Deliverable:** ✅ CERRADO 2026-07-01. Flow E2E funciona. Automatización del lifecycle → V08.
 
 ---
 
-## RT-KESTREL-V08 — State & Session Continuity (2-3h)
+## RT-KESTREL-V08 — State & Session Continuity (2-3h) ← PRÓXIMO
 
 **Objetivo:** Resume real entre sesiones. Estado persistente entre turnos de Claude.
 

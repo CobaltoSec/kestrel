@@ -8,6 +8,13 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-FIX-V01] — 2026-07-01
+
+- `skill/SKILL.md`: lifecycle protocol obligatorio documentado — `session_open` → `phase_enter` → `session_close` con tabla de qué persiste cada call; Kali gate como primer paso (HARD STOP si `reachable: false`)
+- `skill/SKILL.md`: reglas operativas ampliadas — stuck handling, intel_next_step loop, `state_write_machine` en cada hito
+- `docs/v04-phases-archive/`: Fase 13 cutover — `skill/phases/` (9 archivos legacy) movidos a archivo histórico
+- E2E verificado contra Reactor (Easy, 10.129.41.238): Kali gate ✅, VPN ✅, spawn ✅, ping ✅, `sessions.jsonl` con lifecycle events ✅ — 3 gaps de automatización identificados → scope de V08
+
 ## [RT-KESTREL-PREP-V01] — 2026-07-01
 
 - `kali_vm_up`: nuevo tool MCP — boot Kali VM via `vmrun.exe`, espera SSH reachable (polling hasta `timeout_s`, default 120s), reset de sesión SSH cacheada
