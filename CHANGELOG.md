@@ -8,6 +8,23 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-V10b-S2] — 2026-07-01
+
+- `mcp/tools/creds.py`: `creds_ssh_bruteforce` — hydra wrapper (1 user × N passwords) via Kali SSH; parsea output `[22][ssh] host: … login: … password: …`; retorna `{hit_count, hits:[{user, password}]}` (M1)
+- `mcp/tools/creds.py`: `creds_themed_wordlist_gen` — genera wordlist CTF-temática desde machine slug + staff + keywords; variantes lower/cap/upper/+123/+2025/+!; escribe a `/tmp/kestrel-themed-<machine>.txt` en Kali (M2)
+- `agent/loop.py`: `_result_has_new_findings()` — helper que distingue 0 hits reales de progreso genuino; cero en `success_count/discovered_count/hit_count`, `found=None`, `hits=[]`, nmap sin puertos open → `False`; stuck_check dispara correctamente (M3, M9)
+- `mcp/tools/recon.py`: `recon_web_dirfuzz` auto-escalate — si `discovered_count==0` con `common.txt`, reintenta automáticamente con `raft-medium-words.txt` (M4)
+- `mcp/tools/recon.py`: `_probe_nextjs` hint actualizado — indica explícitamente `creds_themed_wordlist_gen` + `creds_ssh_bruteforce` como pasos obligatorios post web-agotada (M5)
+- `mcp/tools/vuln.py`: nuclei/sqlmap/nikto con `timeout {safe_secs}s` wrapper — igual que recon.py; evita hangs indefinidos (M6)
+- `agent/loop.py`: `_SYSTEM_BLIND` ampliado — guía SSH completa: `creds_default_check` → `creds_themed_wordlist_gen` → `creds_ssh_bruteforce` → rockyou fallback → `session_open` → flag extraction → privesc (M7)
+- `agent/loop.py`: `htb_submit_flag` metrics fix — busca `correct` en `result.result` además del top level (HTB tool retorna `{"result": {"correct": true}}`) (M8)
+- `mcp/tools/phase.py`: `p3_exploit` guidance actualizado con `creds_ssh_bruteforce` + `session_exec` como pasos explícitos (M10)
+- `mcp/tools/post.py`: `SUDO_GTFOBINS` 9 → 35 binarios — agrega bash, env, cp, git, docker, nmap, perl, ruby, lua, vim, more, find, awk, tee, wget, curl, php, python3, node, nc (M11)
+- `mcp/tools/post.py`: `post_linpeas_run` — copia local de linpeas en Kali primero (`/opt/linpeas.sh`), fallback a GitHub download (M12)
+- `agent/loop.py`: default model → `claude-sonnet-4-5`; headless mode via `sys.stdin.isatty()`; HITL conflict fix con stuck detection
+- `scripts/run_agent.ps1`: env loading vía `ConvertFrom-Json -AsHashtable` (fix PSObject parsing); ANTHROPIC_API_KEY como warning no error; headless flag limpio
+- 16 tests nuevos (`test_agent.py` × 8, `test_tools_creds_exploit_post_ad.py` × 3, `test_tools_recon.py` × 5) → 474 total (de 458)
+
 ## [RT-KESTREL-V10b-S1] — 2026-07-01
 
 - `agent/__init__.py`: paquete `kestrel.agent` creado — exporta `ReActAgent`

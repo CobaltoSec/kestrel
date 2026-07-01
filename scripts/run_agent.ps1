@@ -24,28 +24,33 @@ $ErrorActionPreference = "Stop"
 # ── Load env from MCP config ─────────────────────────────────────────────────
 $claudeJson = "$env:USERPROFILE\.claude.json"
 if (Test-Path $claudeJson) {
-    $cfg = Get-Content $claudeJson -Raw | ConvertFrom-Json
-    $kestrelServer = $cfg.mcpServers.PSObject.Properties |
-        Where-Object { $_.Name -match "kestrel" } |
-        Select-Object -First 1
-
-    if ($kestrelServer) {
-        $serverEnv = $kestrelServer.Value.env
-        foreach ($prop in $serverEnv.PSObject.Properties) {
-            if (-not [System.Environment]::GetEnvironmentVariable($prop.Name)) {
-                [System.Environment]::SetEnvironmentVariable($prop.Name, $prop.Value, "Process")
+    try {
+        $cfg = Get-Content $claudeJson -Raw | ConvertFrom-Json -AsHashtable
+        $mcpServers = $cfg["mcpServers"]
+        if ($mcpServers) {
+            $kestrelKey = ($mcpServers.Keys | Where-Object { $_ -match "kestrel" } | Select-Object -First 1)
+            if ($kestrelKey) {
+                $serverEnv = $mcpServers[$kestrelKey]["env"]
+                if ($serverEnv) {
+                    foreach ($key in $serverEnv.Keys) {
+                        if (-not [System.Environment]::GetEnvironmentVariable($key)) {
+                            [System.Environment]::SetEnvironmentVariable($key, $serverEnv[$key], "Process")
+                        }
+                    }
+                    Write-Host "[run_agent] Loaded env from MCP config: $kestrelKey" -ForegroundColor Cyan
+                }
             }
         }
-        Write-Host "[run_agent] Loaded env from MCP config: $($kestrelServer.Name)" -ForegroundColor Cyan
+    } catch {
+        Write-Warning "[run_agent] Could not parse MCP config: $_"
     }
 }
 
-# ── Validate required env vars ────────────────────────────────────────────────
-$required = @("ANTHROPIC_API_KEY", "KESTREL_KALI_HOST")
-$missing = $required | Where-Object { -not [System.Environment]::GetEnvironmentVariable($_) }
-if ($missing) {
-    Write-Error "Missing env vars: $($missing -join ', '). Set them or add to MCP config."
-    exit 1
+# ── Check ANTHROPIC_API_KEY specifically (required by kestrel agent) ─────────
+if (-not $env:ANTHROPIC_API_KEY) {
+    Write-Warning "[run_agent] ANTHROPIC_API_KEY not set. kestrel agent will fail. Set it with:"
+    Write-Warning '  $env:ANTHROPIC_API_KEY = "sk-ant-..."'
+    Write-Warning "  or add it to the kestrel MCP server env in ~/.claude.json"
 }
 
 # ── Launch agent ──────────────────────────────────────────────────────────────
@@ -64,29 +69,14 @@ Write-Host "HITL gates will pause and ask for your input." -ForegroundColor Cyan
 Write-Host "Press Ctrl+C at any time to abort gracefully." -ForegroundColor Cyan
 Write-Host ""
 
-$agentCmd = {
-    kestrel agent $using:Machine `
-        --mode $using:Mode `
-        --model $using:Model `
-        --budget-tokens $using:BudgetTokens `
-        --max-iter $using:MaxIter `
-        --verbose
+if ($Headless) {
+    Write-Host "[run_agent] Headless mode — HITL gates auto-confirm (stdin non-TTY)" -ForegroundColor Yellow
 }
 
 if ($LogFile) {
     $logDir = Split-Path $LogFile -Parent
     if ($logDir -and -not (Test-Path $logDir)) { New-Item -ItemType Directory -Force $logDir | Out-Null }
     Write-Host "[run_agent] Logging to $LogFile" -ForegroundColor Cyan
-}
-
-if ($Headless) {
-    Write-Host "[run_agent] Headless mode — HITL gates auto-confirm" -ForegroundColor Yellow
-    if ($LogFile) {
-        kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose < $null 2>&1 | Tee-Object -FilePath $LogFile
-    } else {
-        kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose < $null
-    }
-} elseif ($LogFile) {
     kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose 2>&1 | Tee-Object -FilePath $LogFile
 } else {
     kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose

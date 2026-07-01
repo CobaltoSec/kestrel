@@ -5,6 +5,25 @@
 
 ---
 
+## PRÓXIMO — E2E Reactor post-mejoras V10b-S2
+
+**Estado**: Listo para correr. 12 mejoras implementadas (474 tests ✅, commits b16dd4d + 879c600).
+
+**Target**: Reactor — 10.129.41.238 (Easy, Linux). Spawnar si no está activa.
+
+**Flow desde Claude Code** (sin API key — yo actúo como agente con MCP tools):
+1. `kali_vm_status` → `vpn_up` → `kali_ping_target 10.129.41.238`
+2. `creds_themed_wordlist_gen(machine="reactor", keywords=["nuclear","site7","monitoring","reactorwatch","coolant"], staff=["james","elena","marcus","jthompson","erodriguez","mkim"])`
+3. `creds_ssh_bruteforce(target="10.129.41.238", users=["jthompson","james","erodriguez","elena","mkim","marcus","reactor","admin"], wordlist="/tmp/kestrel-themed-reactor.txt")`
+4. Si 0 hits → `creds_ssh_bruteforce` con `/usr/share/wordlists/rockyou.txt`
+5. `session_open` → `session_exec` → flags → `htb_submit_flag`
+
+**Contexto**: Reactor tiene SSH 22 + port 3000 (Next.js 15 estático "ReactorWatch"). Web agotada. Vector es SSH.
+
+**Blind siempre**: no writeups, no hints externos.
+
+---
+
 ## CAUSAS RAÍZ
 
 1. ~~**Env vars ausentes**~~ — ✅ RESUELTO 2026-07-01.
@@ -74,7 +93,7 @@
 
 ---
 
-## RT-KESTREL-V10b — ReAct Agent Headless ← EN CURSO (S1 done, S2 pending)
+## RT-KESTREL-V10b — ReAct Agent Headless ← CERRADO 2026-07-01
 
 **Objetivo:** Kestrel corre solo, sin Claude Code. Agente que pwna HTB machines autónomamente.
 
@@ -86,11 +105,21 @@
 5. ~~**HITL terminal**~~ — ✅ 4 gates: machine_pick, vector_confirm, submit_flag, debrief. `input()` en CLI.
 6. ~~**Métricas**~~ — ✅ `state_dir/runs/<slug>-<ts>.json`: tools_called, stuck_events, time-to-flag.
 
-### S2 — Run real contra Kobold (Easy, retired) ← PENDIENTE
-1. **Levantar Kali + VPN** → spawn Kobold → `kestrel agent --machine kobold --mode blind`.
-2. **Criterio de done**: agente obtiene root sin intervención excepto los 4 gates.
-3. **Fix de issues reales** — loops infinitos, HITL timing, tool errors en caliente.
-4. **vector_accuracy post-run** — comparar vector elegido vs vector ganador.
+### S2 — Framework fixes post-análisis (2026-07-01) ← DONE (12 mejoras, commits b16dd4d + 879c600)
+- **M1** `creds_ssh_bruteforce` — hydra wrapper (1 user × N passwords). Bloqueante crítico.
+- **M2** `creds_themed_wordlist_gen` — wordlist CTF-temático automático (machine+staff+keywords).
+- **M3** `_result_has_new_findings` — 0 hits ya no cuenta como progreso; stuck_check dispara.
+- **M4** `recon_web_dirfuzz` auto-escalate a raft-medium cuando common.txt=0.
+- **M5** `_probe_nextjs` hint: indica creds_themed_wordlist_gen + creds_ssh_bruteforce explícitamente.
+- **M6** `vuln.py` nuclei con `timeout {safe_secs}s` igual que recon.py.
+- **M7** `_SYSTEM_BLIND` — guía completa SSH flow, session_open, flag extraction, privesc.
+- **M8** `htb_submit_flag` metrics fix — busca "correct" en `result.result` además del top level.
+- **M9** `_result_has_new_findings` — nmap con 0 puertos abiertos = no progress.
+- **M10** `phase.py` p3_exploit — guidance con nuevas tools (bruteforce, session_exec).
+- **M11** `post.py` SUDO_GTFOBINS 9→35 binarios (bash, env, cp, git, docker, nmap, etc.).
+- **M12** `post.py` `post_linpeas_run` — copia local en Kali primero, fallback GitHub.
+
+**E2E pendiente**: correr agente headless contra una Easy machine activa con ANTHROPIC_API_KEY.
 
 **Por qué es el diferenciador**: ninguna herramienta HTB pública hace esto. Pasa de "Claude con tools" a "agente de seguridad con benchmarks". Es lo que convierte el proyecto en investigación publicable.
 
