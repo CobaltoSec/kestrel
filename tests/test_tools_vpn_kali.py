@@ -117,7 +117,98 @@ def test_vpn_up_failure_does_not_persist(fresh_ctx, mock_via_kali):
     assert m.vpn_iface_state is None
 
 
-# ── kali ─────────────────────────────────────────────────────────────────────
+# ── kali vm lifecycle ────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_vmrun(monkeypatch):
+    """Mock _vmrun_exec and kali_proxy for VM lifecycle tools."""
+    calls: list[list[str]] = []
+    return_map: dict[str, dict] = {}
+
+    def fake_vmrun(args: list[str]) -> dict:
+        calls.append(args)
+        key = args[0] if args else ""
+        return return_map.get(key, {"rc": 0, "stdout": "", "stderr": ""})
+
+    monkeypatch.setattr("kestrel.mcp.tools.kali._vmrun_exec", fake_vmrun)
+    monkeypatch.setattr("kestrel.mcp.tools.kali.kali_proxy.close_default_session", lambda: None)
+    return {"calls": calls, "map": return_map}
+
+
+def test_kali_vm_status_running(fresh_ctx, mock_vmrun):
+    vmx = kali_tools._get_vmx()
+    mock_vmrun["map"]["list"] = {"rc": 0, "stdout": f"Total running VMs: 1\n{vmx}", "stderr": ""}
+    mock_vmrun["map"]["getGuestIPAddress"] = {"rc": 0, "stdout": "192.168.179.137", "stderr": ""}
+    result = asyncio.run(kali_tools.kali_vm_status())
+    assert result["running"] is True
+    assert result["ip"] == "192.168.179.137"
+
+
+def test_kali_vm_status_not_running(fresh_ctx, mock_vmrun):
+    mock_vmrun["map"]["list"] = {"rc": 0, "stdout": "Total running VMs: 0", "stderr": ""}
+    result = asyncio.run(kali_tools.kali_vm_status())
+    assert result["running"] is False
+    assert result["ip"] is None
+
+
+def test_kali_vm_up_already_running(fresh_ctx, mock_vmrun, monkeypatch):
+    vmx = kali_tools._get_vmx()
+    mock_vmrun["map"]["list"] = {"rc": 0, "stdout": vmx, "stderr": ""}
+    # Mock via_kali to succeed immediately
+    monkeypatch.setattr(
+        "kestrel.mcp.tools.kali.kali_proxy.via_kali",
+        lambda cmd, timeout=5.0: __import__("kestrel.transport.base", fromlist=["ExecResult"]).ExecResult(
+            stdout="ok", stderr="", rc=0, duration_s=0.1
+        ),
+    )
+    result = asyncio.run(kali_tools.kali_vm_up())
+    assert result["started"] is True
+    assert result["reachable"] is True
+    assert result["stdout"] == "already_running"
+    # vmrun start should NOT have been called
+    assert not any(a[0] == "start" for a in mock_vmrun["calls"])
+
+
+def test_kali_vm_up_boots_and_waits(fresh_ctx, mock_vmrun, monkeypatch):
+    mock_vmrun["map"]["list"] = {"rc": 0, "stdout": "Total running VMs: 0", "stderr": ""}
+    mock_vmrun["map"]["start"] = {"rc": 0, "stdout": "", "stderr": ""}
+
+    from kestrel.transport.base import ExecResult
+    monkeypatch.setattr(
+        "kestrel.mcp.tools.kali.kali_proxy.via_kali",
+        lambda cmd, timeout=5.0: ExecResult(stdout="ok", stderr="", rc=0, duration_s=0.1),
+    )
+    monkeypatch.setattr("kestrel.mcp.tools.kali.asyncio.sleep", lambda _: asyncio.coroutine(lambda: None)())
+
+    result = asyncio.run(kali_tools.kali_vm_up())
+    assert result["started"] is True
+    assert result["reachable"] is True
+    assert any(a[0] == "start" for a in mock_vmrun["calls"])
+
+
+def test_kali_vm_up_start_fails(fresh_ctx, mock_vmrun):
+    mock_vmrun["map"]["list"] = {"rc": 0, "stdout": "Total running VMs: 0", "stderr": ""}
+    mock_vmrun["map"]["start"] = {"rc": 1, "stdout": "", "stderr": "Error: VM not found"}
+    result = asyncio.run(kali_tools.kali_vm_up())
+    assert result["started"] is False
+    assert result["reachable"] is False
+
+
+def test_kali_vm_down(fresh_ctx, mock_vmrun):
+    mock_vmrun["map"]["stop"] = {"rc": 0, "stdout": "", "stderr": ""}
+    result = asyncio.run(kali_tools.kali_vm_down())
+    assert result["stopped"] is True
+    assert any(a[0] == "stop" for a in mock_vmrun["calls"])
+
+
+def test_kali_vm_down_failure(fresh_ctx, mock_vmrun):
+    mock_vmrun["map"]["stop"] = {"rc": 255, "stdout": "", "stderr": "VM not powered on"}
+    result = asyncio.run(kali_tools.kali_vm_down())
+    assert result["stopped"] is False
+
+
+# ── kali SSH health ───────────────────────────────────────────────────────────
 
 
 def test_kali_status_invokes_id_uname(fresh_ctx, mock_via_kali):

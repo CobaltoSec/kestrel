@@ -8,6 +8,16 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-PREP-V01] — 2026-07-01
+
+- `kali_vm_up`: nuevo tool MCP — boot Kali VM via `vmrun.exe`, espera SSH reachable (polling hasta `timeout_s`, default 120s), reset de sesión SSH cacheada
+- `kali_vm_down`: nuevo tool MCP — `vmrun stop soft` + cierre de sesión SSH
+- `kali_vm_status`: nuevo tool MCP — power state + IP via `vmrun getGuestIPAddress`, sin SSH
+- 7 tests nuevos en `test_tools_vpn_kali.py` → 432 total (de 425)
+- `mcp_servers.json`: env block agregado al entry kestrel — `KESTREL_KALI_HOST`, `KESTREL_KALI_USER`, `KESTREL_KALI_KEY`, `HTB_API_TOKEN`, `HTB_USER_ID`, `KESTREL_KB_PATH`
+- 16 commits pusheados a `github.com/CobaltoSec/kestrel` main (v0.5.0 → v0.7.1, feat/v04-mcp-pivot merge)
+- `skill/SKILL.md` command path corregido: `C:/opsec/runner/` → `C:/Proyectos/Kestrel/`
+
 ## [0.7.1] — 2026-06-15
 
 ### Fixed
