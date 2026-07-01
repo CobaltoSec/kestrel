@@ -329,10 +329,18 @@ class ReActAgent:
         return None
 
     def _terminal_hitl(self, gate: dict[str, Any]) -> str:
-        """Block on terminal input for a HITL gate. Returns operator answer."""
+        """Block on terminal input for a HITL gate. Returns operator answer.
+        Auto-confirms first option when stdin is not a TTY (headless/piped mode).
+        """
         question = gate.get("question") or gate.get("instruction_to_llm", "Operator input required")
         options = gate.get("options", ["yes", "no"])
         gate_id = gate.get("gate", "unknown")
+
+        # Headless mode: auto-confirm first option
+        if not sys.stdin.isatty():
+            answer = options[0] if options else "yes"
+            self._log(f"[agent] HITL gate '{gate_id}' auto-confirmed (headless): {answer}")
+            return answer
 
         print(f"\n{'='*60}")
         print(f"[HITL GATE: {gate_id}]")

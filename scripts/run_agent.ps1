@@ -13,7 +13,9 @@ param(
     [string]$Mode        = "blind",
     [string]$Model       = "claude-sonnet-4-5",
     [int]   $BudgetTokens = 500000,
-    [int]   $MaxIter      = 80
+    [int]   $MaxIter      = 80,
+    [string]$LogFile      = "",    # if set, tee output to this file
+    [switch]$Headless              # pipe NUL → stdin; HITL gates auto-confirm
 )
 
 Set-StrictMode -Version Latest
@@ -62,9 +64,30 @@ Write-Host "HITL gates will pause and ask for your input." -ForegroundColor Cyan
 Write-Host "Press Ctrl+C at any time to abort gracefully." -ForegroundColor Cyan
 Write-Host ""
 
-kestrel agent $Machine `
-    --mode $Mode `
-    --model $Model `
-    --budget-tokens $BudgetTokens `
-    --max-iter $MaxIter `
-    --verbose
+$agentCmd = {
+    kestrel agent $using:Machine `
+        --mode $using:Mode `
+        --model $using:Model `
+        --budget-tokens $using:BudgetTokens `
+        --max-iter $using:MaxIter `
+        --verbose
+}
+
+if ($LogFile) {
+    $logDir = Split-Path $LogFile -Parent
+    if ($logDir -and -not (Test-Path $logDir)) { New-Item -ItemType Directory -Force $logDir | Out-Null }
+    Write-Host "[run_agent] Logging to $LogFile" -ForegroundColor Cyan
+}
+
+if ($Headless) {
+    Write-Host "[run_agent] Headless mode — HITL gates auto-confirm" -ForegroundColor Yellow
+    if ($LogFile) {
+        kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose < $null 2>&1 | Tee-Object -FilePath $LogFile
+    } else {
+        kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose < $null
+    }
+} elseif ($LogFile) {
+    kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose 2>&1 | Tee-Object -FilePath $LogFile
+} else {
+    kestrel agent $Machine --mode $Mode --model $Model --budget-tokens $BudgetTokens --max-iter $MaxIter --verbose
+}
