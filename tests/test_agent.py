@@ -204,3 +204,36 @@ def test_react_agent_run_budget_exceeded(tmp_path, fresh_registry):
         metrics = ag.run()
 
     assert metrics.outcome in ("budget_exceeded", "abandoned", "error", "max_iterations")
+
+
+# ── _result_has_new_findings (M3) ────────────────────────────────────────────
+
+
+def test_result_has_new_findings_zero_success_count():
+    from kestrel.agent.loop import _result_has_new_findings
+    assert _result_has_new_findings({"success_count": 0, "successes": []}) is False
+
+
+def test_result_has_new_findings_zero_discovered():
+    from kestrel.agent.loop import _result_has_new_findings
+    assert _result_has_new_findings({"discovered_count": 0}) is False
+
+
+def test_result_has_new_findings_found_none():
+    from kestrel.agent.loop import _result_has_new_findings
+    assert _result_has_new_findings({"found": None, "tries": []}) is False
+
+
+def test_result_has_new_findings_error():
+    from kestrel.agent.loop import _result_has_new_findings
+    assert _result_has_new_findings({"error": "ssh timeout"}) is False
+
+
+def test_result_has_new_findings_real_hit():
+    from kestrel.agent.loop import _result_has_new_findings
+    assert _result_has_new_findings({"success_count": 1, "hits": [{"user": "admin", "password": "x"}]}) is True
+
+
+def test_result_has_new_findings_text_result():
+    from kestrel.agent.loop import _result_has_new_findings
+    assert _result_has_new_findings({"output": "nmap scan complete", "ports": [22, 80]}) is True

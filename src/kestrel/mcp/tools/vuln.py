@@ -20,7 +20,14 @@ from kestrel.mcp.tools.state import _resolve_session_dir
 from kestrel.transport import kali_proxy
 
 
+_HEAVY_CMDS = ("nuclei", "sqlmap", "nikto")
+
+
 async def _run_kali(cmd: str, timeout: float = 600.0) -> dict[str, Any]:
+    first_token = cmd.strip().split()[0]
+    if any(first_token.endswith(t) for t in _HEAVY_CMDS):
+        safe_secs = max(30, int(timeout) - 30)
+        cmd = f"timeout {safe_secs}s {cmd}"
     res = await asyncio.to_thread(kali_proxy.via_kali, cmd, timeout)
     return {
         "cmd": cmd,

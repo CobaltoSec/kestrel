@@ -78,6 +78,31 @@ After each tool result, update your mental model and proceed.
 """
 
 
+def _result_has_new_findings(result: Any) -> bool:
+    """Return True only when a tool result contains genuinely new information.
+
+    Zero-hit results (spray with 0 successes, dirfuzz with 0 paths, etc.) are
+    treated as no-progress so stuck_check fires after 3 such iterations.
+    """
+    if not isinstance(result, dict):
+        return bool(result)
+    if "error" in result:
+        return False
+    # Explicit zero-finding keys
+    _ZERO_KEYS = {"success_count", "discovered_count", "hit_count", "finding_count"}
+    for key in _ZERO_KEYS:
+        if key in result and result[key] == 0:
+            return False
+    # Null-found patterns (e.g. creds_default_check returns {"found": null})
+    if "found" in result and result["found"] is None:
+        return False
+    # Empty hit lists
+    for key in ("hits", "successes", "findings", "shares_detected"):
+        if key in result and result[key] == []:
+            return False
+    return True
+
+
 class ReActAgent:
     """Autonomous HTB engagement agent using Anthropic's tool_use protocol."""
 
@@ -261,8 +286,8 @@ class ReActAgent:
                         "content": result_str,
                     }
                 )
-                # Progress = at least one tool returned a non-error result
-                if not (isinstance(result, dict) and "error" in result):
+                # Progress = at least one tool returned a non-empty, non-error result
+                if _result_has_new_findings(result):
                     got_progress = True
 
             # Append this turn to messages

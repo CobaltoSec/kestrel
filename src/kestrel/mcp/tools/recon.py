@@ -340,8 +340,12 @@ async def _probe_nextjs(target: str, port: int) -> dict[str, Any]:
     hint: str | None = None
     if is_static:
         hint = (
-            "Next.js puro estático — sin Server Actions ni rutas protegidas detectadas. "
-            "Superficie web mínima → pivotear a SSH + UDP scan + domain-themed paths."
+            "Next.js puro estático — superficie web agotada. "
+            "Pasos obligatorios en orden: "
+            "1) creds_themed_wordlist_gen(machine=<slug>, keywords=[<page_keywords>], staff=[<names>]) "
+            "2) creds_ssh_bruteforce(target=<ip>, users=[<candidates>], wordlist=<output_path>) "
+            "3) Si falla: creds_ssh_bruteforce con /usr/share/wordlists/rockyou.txt. "
+            "NO seguir explorando la web — el vector es SSH."
         )
     return {
         "detected": True,
@@ -532,6 +536,25 @@ async def recon_web_dirfuzz(
         extra_raw = await _run_kali(extra_cmd, timeout=120.0)
         discovered += _parse_feroxbuster(extra_raw["stdout"])
         raw_output += "\n--- extra_paths ---\n" + extra_raw["stdout"]
+
+    # Auto-escalate to raft-medium when common.txt yields 0 results
+    _MEDIUM_WL = "/usr/share/seclists/Discovery/Web-Content/raft-medium-words.txt"
+    if (
+        len(discovered) == 0
+        and wordlist == "/usr/share/seclists/Discovery/Web-Content/common.txt"
+    ):
+        medium_cmd = (
+            f"command -v feroxbuster >/dev/null 2>&1 && "
+            f"feroxbuster --url {shlex.quote(base_url)} "
+            f"--wordlist {_MEDIUM_WL} "
+            f"--extensions {shlex.quote(extensions)} "
+            f"--depth {depth} "
+            f"--no-state --no-recursion-limit --silent "
+            f"--timeout 10 -k {header_arg} 2>/dev/null"
+        )
+        medium_raw = await _run_kali(medium_cmd, timeout=600.0)
+        discovered += _parse_feroxbuster(medium_raw["stdout"])
+        raw_output += "\n--- raft-medium-words escalation ---\n" + medium_raw["stdout"]
 
     artifact = _save_artifact(
         machine, "dirfuzz",

