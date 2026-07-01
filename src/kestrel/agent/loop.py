@@ -184,12 +184,12 @@ class ReActAgent:
             for tb in text_blocks:
                 self._log(f"[agent] {tb.text}")
 
-            # Check for HITL in text blocks
+            # Check for HITL in text blocks — one gate per turn max
+            hitl_fired = False
             for tb in text_blocks:
                 hitl = self._parse_inline_hitl(tb.text)
                 if hitl:
                     answer = self._terminal_hitl(hitl)
-                    # Inject answer back as user message continuation
                     messages.append({"role": "assistant", "content": response.content})
                     messages.append(
                         {
@@ -198,7 +198,11 @@ class ReActAgent:
                         }
                     )
                     self._metrics.hitl_gates += 1
-                    continue
+                    hitl_fired = True
+                    break  # one HITL per iteration
+
+            if hitl_fired:
+                continue  # skip tool execution — go to next iteration
 
             # If no tool calls — agent is done or stuck
             if not tool_blocks:
@@ -257,7 +261,9 @@ class ReActAgent:
                         "content": result_str,
                     }
                 )
-                got_progress = True
+                # Progress = at least one tool returned a non-error result
+                if not (isinstance(result, dict) and "error" in result):
+                    got_progress = True
 
             # Append this turn to messages
             messages.append({"role": "assistant", "content": response.content})
