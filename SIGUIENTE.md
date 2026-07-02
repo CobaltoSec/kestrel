@@ -13,16 +13,21 @@
 
 **Modo**: Claude Code + MCP tools (yo actúo como agente). Sin agente headless, sin ANTHROPIC_API_KEY separada.
 
-**Flow desde Claude Code**:
-1. `kali_vm_status` → `vpn_up` → `kali_ping_target 10.129.41.238`
-2. `creds_themed_wordlist_gen(machine="reactor", keywords=["nuclear","site7","monitoring","reactorwatch","coolant"], staff=["james","elena","marcus","jthompson","erodriguez","mkim"])`
-3. `creds_ssh_bruteforce(target="10.129.41.238", users=["jthompson","james","erodriguez","elena","mkim","marcus","reactor","admin"], wordlist="/tmp/kestrel-themed-reactor.txt")`
-   - `-e nsr` ahora incluido → prueba `reactor/reactor`, `rotcaer`, `""` automáticamente
-4. Si 0 hits → `creds_ssh_bruteforce` con `/usr/share/wordlists/rockyou.txt`
-5. `session_open` → `post_check_suid` + `post_linpeas_run` → `flag_extract` → `htb_submit_flag`
+**Estado sesión 2026-07-02**: Gate completo ✅
+- Kali up ✅ (locks stale limpiados para arrancar)
+- VPN conectada ✅
+- Reactor spawneada → IP `10.129.43.0` ✅ (persista en state)
+- **Pendiente**: reinicio Claude Code para tomar fix `commit 77ec47a` (creds tools aceptan string CSV, no solo list)
+
+**Retomar desde aquí** (post-reinicio):
+1. `creds_themed_wordlist_gen(machine="reactor", keywords="nuclear,site7,monitoring,reactorwatch,coolant", staff="james,elena,marcus,jthompson,erodriguez,mkim")`
+2. `creds_ssh_bruteforce(target="10.129.43.0", users="jthompson,james,erodriguez,elena,mkim,marcus,reactor,admin", wordlist="/tmp/kestrel-themed-reactor.txt")`
+   - `-e nsr` incluido → prueba `reactor/reactor`, `rotcaer`, `""` automáticamente
+3. Si 0 hits → `creds_ssh_bruteforce` con `/usr/share/wordlists/rockyou.txt`
+4. `session_open` → `post_check_suid` + `post_linpeas_run` → `flag_extract` → `htb_submit_flag`
 
 **Contexto**: Reactor tiene SSH 22 + port 3000 (Next.js 15 estático "ReactorWatch"). Web agotada. Vector es SSH.
-Bloqueante histórico probable: `CRED_FAIL_THRESHOLD=3` abandonaba bruteforce en 3 fallos. Ahora threshold=20 (100 durante bruteforce activo).
+Bloqueante histórico: `CRED_FAIL_THRESHOLD` ya en 20 (100 durante bruteforce activo). `-e nsr` ya incluido.
 
 **Blind siempre**: no writeups, no hints externos.
 
