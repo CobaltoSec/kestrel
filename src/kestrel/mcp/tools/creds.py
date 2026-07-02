@@ -155,12 +155,14 @@ async def creds_password_spray(
 )
 async def creds_ssh_bruteforce(
     target: str,
-    users: list[str],
+    users: list[str] | str,
     wordlist: str,
     threads: int = 4,
     timeout: int = 300,
     machine: str | None = None,
 ) -> dict[str, Any]:
+    if isinstance(users, str):
+        users = [u.strip() for u in users.split(",") if u.strip()]
     users_payload = "\n".join(users)
     cmd = (
         f"set -e; uf=$(mktemp); printf {shlex.quote(users_payload)} > $uf; "
@@ -228,10 +230,14 @@ async def creds_ssh_bruteforce(
 )
 async def creds_themed_wordlist_gen(
     machine: str,
-    keywords: list[str] | None = None,
-    staff: list[str] | None = None,
+    keywords: list[str] | str | None = None,
+    staff: list[str] | str | None = None,
     output_path: str | None = None,
 ) -> dict[str, Any]:
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+    if isinstance(staff, str):
+        staff = [s.strip() for s in staff.split(",") if s.strip()]
     words: set[str] = set()
     base_words: list[str] = [machine] + (keywords or []) + (staff or [])
 
