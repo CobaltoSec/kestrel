@@ -5,6 +5,42 @@
 
 ---
 
+## RT-KESTREL-V10c — Mejoras post-Reactor engagement (backlog)
+
+Identificadas durante el engagement contra Reactor (2026-07-02). Sin bloquear el E2E, pero críticas para el siguiente run.
+
+### Bruteforce / SSH
+
+1. **Zombie hydra processes** — `creds_ssh_bruteforce` timeout a 300s deja hydra corriendo. Al relanzar, spawna duplicados (llegamos a 15+ instancias). Fix: `pkill -f "hydra.*<target>"` al inicio + lock file por target.
+
+2. **Sin resume offset** — al timeout con N tries hechos, el siguiente run reinicia desde línea 0. Fix: guardar offset en state, pasar `tail -n +N` al wordlist en run siguiente (o usar `hydra -R` con restore file propio).
+
+3. **ncrack como backend alternativo** — hydra SSH: ~40-80 tries/min con 8 threads; ncrack con `-T5` puede ser más eficiente. Añadir `engine=ncrack` como opción en `creds_ssh_bruteforce`.
+
+4. **Rate awareness** — si hydra reporta <50 tries/min con 8 threads, el server rate-limita. El tool debería detectarlo y bajar a 2-4 threads automáticamente.
+
+5. **Pipeline de wordlists incompleto** — el orden actual (themed → best1050 → fasttrack → rockyou) omite `darkweb2017_top-1000.txt` (1000) y `john.lst` (3559) que son candidatos fuertes pre-rockyou.
+
+### Recon web
+
+6. **`recon_web_fingerprint` no prueba archivos estáticos base** — `/robots.txt`, `/security.txt`, `/humans.txt`, `/sitemap.xml`, `/manifest.json` deben probarse siempre. Actualmente los omite.
+
+7. **Next.js recon incompleto** — cuando se detecta Next.js, no se prueban automáticamente:
+   - Header `RSC: 1` en `/` para obtener payload React Server Components completo
+   - `/_next/data/<buildId>/index.json` para datos pre-renderizados
+   - `x-middleware-subrequest` bypass (CVE-2025-29927)
+   - `/_next/image?url=...` SSRF test
+
+8. **`recon_web_dirfuzz` no soporta background** — bloquea 300s. Para raft-medium (30k words) necesita más tiempo. Fix: lanzar feroxbuster con `nohup ... &`, guardar PID en state, chequear resultado via `session_exec` en el siguiente ciclo.
+
+### Username / wordlist gen
+
+9. **`creds_themed_wordlist_gen` no genera variantes con títulos académicos** — si el staff tiene "Dr. Elena Rodriguez", debería generar usernames `drelena`, `drrodriguez`, `dr.rodriguez` además de password variants.
+
+10. **`recon_web_username_extract` debería parsear títulos** — "Dr.", "Prof.", "Ing." en nombres deben producir variantes de username con y sin prefijo.
+
+---
+
 ## PRÓXIMO — E2E Reactor post-mejoras V10b-S3
 
 **Estado**: Listo para correr. 30 mejoras adicionales implementadas (474 tests ✅, commit `ce89967`).
@@ -13,21 +49,30 @@
 
 **Modo**: Claude Code + MCP tools (yo actúo como agente). Sin agente headless, sin ANTHROPIC_API_KEY separada.
 
-**Estado sesión 2026-07-02**: Gate completo ✅
-- Kali up ✅ (locks stale limpiados para arrancar)
-- VPN conectada ✅
-- Reactor spawneada → IP `10.129.43.0` ✅ (persista en state)
-- **Pendiente**: reinicio Claude Code para tomar fix `commit 77ec47a` (creds tools aceptan string CSV, no solo list)
+**Estado sesión 2026-07-02** (post-reinicio, segunda sesión): Web 100% agotada ✅, bruteforce SSH en curso sin credenciales
+- Kali up ✅ | VPN ✅ | IP `10.129.43.0` ✅
+- Web: RSC payload completo analizado (sin creds), SSRF bloqueado, UDP sin servicios, rutas exhaustas
+- SSH bruteforce: themed ✅, best1050 ✅, fasttrack ✅, targeted ✅, targeted2 ✅
+  - corporate_passwords.txt PARCIAL: jthompson 717/1764, james 753/1764, elena 417/1764 — **interrumpido por zombie hydra**
+  - Usuarios probados: jthompson, james, erodriguez, elena, mkim, marcus, reactor, admin, ubuntu, root, thompson, rodriguez, kim, drelena, drrodriguez, dr, ndcorp, safety, technician, watchdog, service, maintenance
 
-**Retomar desde aquí** (post-reinicio):
-1. `creds_themed_wordlist_gen(machine="reactor", keywords="nuclear,site7,monitoring,reactorwatch,coolant", staff="james,elena,marcus,jthompson,erodriguez,mkim")`
-2. `creds_ssh_bruteforce(target="10.129.43.0", users="jthompson,james,erodriguez,elena,mkim,marcus,reactor,admin", wordlist="/tmp/kestrel-themed-reactor.txt")`
-   - `-e nsr` incluido → prueba `reactor/reactor`, `rotcaer`, `""` automáticamente
-3. Si 0 hits → `creds_ssh_bruteforce` con `/usr/share/wordlists/rockyou.txt`
-4. `session_open` → `post_check_suid` + `post_linpeas_run` → `flag_extract` → `htb_submit_flag`
+**Retomar desde aquí**:
+1. `killall hydra && rm -f ~/hydra.restore` en Kali (limpiar zombies)
+2. Completar corporate_passwords.txt para los 3 usuarios (desde offsets guardados):
+   - `tail -n +715 corporate_passwords.txt | hydra -I -l jthompson -P /dev/stdin ...`
+   - `tail -n +751 corporate_passwords.txt | hydra -I -l james -P /dev/stdin ...`
+   - `tail -n +415 corporate_passwords.txt | hydra -I -l elena -P /dev/stdin ...`
+3. Si 0 hits → `john.lst` (3559) + `darkweb2017_top-1000` contra todos los usuarios
+4. Si 0 hits → rockyou top-5000 contra jthompson (usuario más probable)
+5. `session_open` → `post_check_suid` + `post_linpeas_run` → `flag_extract` → `htb_submit_flag`
 
-**Contexto**: Reactor tiene SSH 22 + port 3000 (Next.js 15 estático "ReactorWatch"). Web agotada. Vector es SSH.
-Bloqueante histórico: `CRED_FAIL_THRESHOLD` ya en 20 (100 durante bruteforce activo). `-e nsr` ya incluido.
+**Contexto técnico web** (no re-explorar):
+- Next.js 15 App Router, SSG completo (`x-nextjs-prerender: 1`, stale-time 136 años)
+- Build ID: `L3bimJe_3LvBcFWAnK5L4`; solo `/` devuelve contenido (RSC: 1 header requerido)
+- Staff: Dr. Elena Rodriguez (Lead Nuclear Engineer, ONLINE), Marcus Kim (Senior Technician, ONLINE), James Thompson (Safety Officer, OFFLINE)
+- Footer: "Nuclear Dynamics Corp | Site-7 | Classification: Restricted | v3.2.1"
+
+**Blind siempre**: no writeups, no hints externos.
 
 **Blind siempre**: no writeups, no hints externos.
 

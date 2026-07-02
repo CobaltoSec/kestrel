@@ -8,6 +8,27 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [RT-KESTREL-V10c-BACKLOG] — 2026-07-02
+
+Sesión E2E contra Reactor (10.129.43.0). Máquina no owned — web completamente agotada, SSH bruteforce sin credenciales. Documentadas 10 mejoras al framework basadas en gaps descubiertos.
+
+**Hallazgos técnicos del engagement**:
+- Dashboard Next.js 15 100% SSG estático (header `RSC: 1` expone payload completo; sin credenciales, sin server actions, sin rutas dinámicas)
+- SSRF vía `/_next/image` bloqueado por config (`"url" parameter is not allowed`)
+- UDP scan: sin servicios relevantes
+- SSH 9.6 (Ubuntu): `publickey,password` — sin user enumeration timing confiable
+
+**Mejoras documentadas en SIGUIENTE.md → RT-KESTREL-V10c**:
+- `creds_ssh_bruteforce`: zombie hydra processes al timeout + sin resume offset + sin rate awareness
+- Añadir `ncrack` como backend alternativo para SSH
+- Pipeline de wordlists: incorporar `darkweb2017_top-1000` y `john.lst` pre-rockyou
+- `recon_web_fingerprint`: probar siempre archivos estáticos base (`/robots.txt`, `/security.txt`, etc.)
+- Next.js recon: header `RSC: 1`, `/_next/data/`, CVE-2025-29927, SSRF test automáticos
+- `recon_web_dirfuzz`: modo background con `nohup` + PID en state
+- `creds_themed_wordlist_gen` y `recon_web_username_extract`: variantes con títulos académicos (Dr., Prof.)
+
+**Estado E2E Reactor**: deferred — retomar con bruteforce completado (corporate_passwords.txt parcial) y V10c implementado.
+
 ## [RT-KESTREL-V10b-S3] — 2026-07-01
 
 Deep audit pre-E2E: 5 agentes de investigación (SSH/creds, recon/web, intel/stuck, post/session, agent loop) identificaron 37 gaps; 5 agentes de implementación paralelos aplicaron 30 fixes en 14 archivos. 474 tests ✅.
