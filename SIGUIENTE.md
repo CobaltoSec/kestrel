@@ -7,11 +7,13 @@
 
 ## PRÓXIMO — E2E Reactor post-mejoras V10b-S3
 
-**Estado**: Listo para correr. 30 mejoras adicionales implementadas (474 tests ✅, sin commit aún).
+**Estado**: Listo para correr. 30 mejoras adicionales implementadas (474 tests ✅, commit `ce89967`).
 
 **Target**: Reactor — 10.129.41.238 (Easy, Linux). Spawnar si no está activa.
 
-**Flow desde Claude Code** (sin API key — yo actúo como agente con MCP tools):
+**Modo**: Claude Code + MCP tools (yo actúo como agente). Sin agente headless, sin ANTHROPIC_API_KEY separada.
+
+**Flow desde Claude Code**:
 1. `kali_vm_status` → `vpn_up` → `kali_ping_target 10.129.41.238`
 2. `creds_themed_wordlist_gen(machine="reactor", keywords=["nuclear","site7","monitoring","reactorwatch","coolant"], staff=["james","elena","marcus","jthompson","erodriguez","mkim"])`
 3. `creds_ssh_bruteforce(target="10.129.41.238", users=["jthompson","james","erodriguez","elena","mkim","marcus","reactor","admin"], wordlist="/tmp/kestrel-themed-reactor.txt")`
@@ -121,7 +123,7 @@ Bloqueante histórico probable: `CRED_FAIL_THRESHOLD=3` abandonaba bruteforce en
 - **M11** `post.py` SUDO_GTFOBINS 9→35 binarios (bash, env, cp, git, docker, nmap, etc.).
 - **M12** `post.py` `post_linpeas_run` — copia local en Kali primero, fallback GitHub.
 
-### S3 — Deep audit + 30 mejoras pre-E2E (2026-07-01) ← DONE (474 tests ✅, sin commit)
+### S3 — Deep audit + 30 mejoras pre-E2E (2026-07-01) ← DONE (474 tests ✅, commit `ce89967`)
 
 5 agentes investigación + 5 agentes implementación paralelos. Root causes del E2E fallido identificados y resueltos.
 
@@ -146,7 +148,7 @@ Bloqueante histórico probable: `CRED_FAIL_THRESHOLD=3` abandonaba bruteforce en
 
 **14 archivos modificados**: `creds.py`, `fingerprint.py`, `recon.py`, `stuck.py`, `intel.py`, `phase.py`, `post.py`, `ssh.py`, `session.py`, `flag.py`, `loop.py`, `bridge.py`, `test_stuck_detector.py`, `test_tools_recon.py`
 
-**E2E pendiente**: commit S3 + correr agente headless contra Reactor con ANTHROPIC_API_KEY.
+**E2E pendiente**: correr contra Reactor desde Claude Code con MCP tools (ver sección PRÓXIMO arriba).
 
 **Por qué es el diferenciador**: ninguna herramienta HTB pública hace esto. Pasa de "Claude con tools" a "agente de seguridad con benchmarks". Es lo que convierte el proyecto en investigación publicable.
 
