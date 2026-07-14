@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kestrel-htb"
-version = "0.4.0-dev"
+version = "0.7.1"
 description = "HackTheBox engagement orchestrator — MCP server for AI-driven VM owning"
 readme = "README.md"
 license = { text = "Apache-2.0" }
