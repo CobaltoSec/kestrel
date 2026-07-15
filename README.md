@@ -139,7 +139,7 @@ cp .env.example .env
 
 ## Status
 
-- **<!-- KESTREL_VERSION_START -->v0.7.1<!-- KESTREL_VERSION_END -->** (2026-07-01): <!-- KESTREL_TOOLS_COUNT_START -->77<!-- KESTREL_TOOLS_COUNT_END --> MCP tools. Operational hardening sprint — web-only pivot, NextJS detection, UDP fallback, username extraction, dirfuzz bypass, intel_cve_lookup auto-nuclei.
+- **<!-- KESTREL_VERSION_START -->0.7.1<!-- KESTREL_VERSION_END -->** (2026-07-01): <!-- KESTREL_TOOLS_COUNT_START -->77<!-- KESTREL_TOOLS_COUNT_END --> MCP tools. Operational hardening sprint — web-only pivot, NextJS detection, UDP fallback, username extraction, dirfuzz bypass, intel_cve_lookup auto-nuclei.
 - **v0.2** (roadmap): Multi-path hypothesis + L3 feedback loop + active Hard machine validation
 - **v0.3** (roadmap): Sanitized phase library + full case studies + comparison vs AutoPwn/HackBot
 
