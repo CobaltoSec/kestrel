@@ -19,6 +19,11 @@ from typing import Any
 from kestrel.mcp import context as mcp_context
 from kestrel.mcp import registry
 
+try:
+    from cobalt_hub_client import emit as _hub_emit
+except ImportError:
+    _hub_emit = None
+
 
 # Path to the HTBClient lives outside the htb-framework-public repo (in CobaltoSec).
 # We import lazily so tests can patch without requiring the real module on sys.path.
@@ -224,6 +229,12 @@ async def htb_submit_flag(
             patch["root_owned"] = True
         if patch:
             ctx.state_store.update_machine(slug, patch)
+        if _hub_emit:
+            _hub_emit("htb.owned", {
+                "slug": slug, "flag_type": flag_type,
+                "machine_id": mid, "difficulty": difficulty,
+                "os": info.get("os"), "result": result,
+            }, source_tool="kestrel")
         return {
             "slug": slug,
             "machine_id": mid,
